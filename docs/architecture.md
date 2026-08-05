@@ -64,9 +64,9 @@ md2pdf 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分
 
 ```
 crates/md2pdf-core/src/template.rs
-  → ../../../../templates/mpe.html
-  → ../../../../templates/assets/*.css
-  → ../../../../templates/assets/*.js
+  → ../../../templates/mpe.html
+  → ../../../templates/assets/*.css
+  → ../../../templates/assets/*.js
 ```
 
 ## 双模式入口 (GUI)

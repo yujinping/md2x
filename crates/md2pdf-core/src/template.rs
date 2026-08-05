@@ -10,10 +10,10 @@ pub fn render_html_template_with_metadata(
     title: &str,
     metadata: Option<&HashMap<String, String>>,
 ) -> String {
-    let template = include_str!("../../../../templates/mpe.html");
-    let github_css = include_str!("../../../../templates/assets/github-markdown.min.css");
-    let atom_css = include_str!("../../../../templates/assets/atom-one-dark.min.css");
-    let highlight_js = include_str!("../../../../templates/assets/highlight.min.js");
+    let template = include_str!("../../../templates/mpe.html");
+    let github_css = include_str!("../../../templates/assets/github-markdown.min.css");
+    let atom_css = include_str!("../../../templates/assets/atom-one-dark.min.css");
+    let highlight_js = include_str!("../../../templates/assets/highlight.min.js");
 
     let (toc_html, body_fixed) = generate_toc(html_body);
     let metadata_html = metadata
