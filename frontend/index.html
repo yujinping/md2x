@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>md2pdf</title>
+</head>
+<body class="bg-[#0f1117] text-[#e2e4e9] font-sans antialiased">
+  <div id="app"></div>
+
+  <!-- PDF 加载遮罩（纯 DOM，绕过 Vue 响应式延迟） -->
+  <div id="pdfOverlay" class="pdf-overlay" style="display:none">
+    <div class="pdf-overlay-inner">
+      <span class="pdf-overlay-spinner"></span>
+      <span class="pdf-overlay-label" id="pdfOverlayLabel">正在准备 PDF 预览…</span>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
