@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/md2pdf-core",
+    "crates/md2pdf-cli",
+    "crates/md2pdf-gui",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.7"
+edition = "2021"

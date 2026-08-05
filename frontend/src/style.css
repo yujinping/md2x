@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/* ========== 主题变量 ========== */
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d28;
+  --border: #2a2e3e;
+  --border-hover: #3d4150;
+  --surface-hover: #222639;
+  --surface-active: #2a2e3e;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-active: #4338ca;
+  --amber: #f59e0b;
+  --amber-hover: #d97706;
+  --amber-active: #b45309;
+  --text: #e2e4e9;
+  --text-muted: #888b98;
+  --text-dim: #525561;
+  --overlay-bg: rgba(15, 17, 23, 0.7);
+  --overlay-bg-light: rgba(15, 17, 23, 0.5);
+  --dialog-bg: #1a1d28;
+  --dialog-border: #2a2e3e;
+  --dialog-shadow: rgba(0,0,0,0.4);
+  --welcome-icon: #2a2e3e;
+  --content-bg: #ffffff;
+}
+
+.light {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --border: #d4d6da;
+  --border-hover: #b0b2b8;
+  --surface-hover: #f0f0f2;
+  --surface-active: #e8e8ec;
+  --amber: #d97706;
+  --amber-hover: #b45309;
+  --amber-active: #92400e;
+  --text: #1d1d1f;
+  --text-muted: #6e6e73;
+  --text-dim: #aeaeb2;
+  --overlay-bg: rgba(0, 0, 0, 0.3);
+  --overlay-bg-light: rgba(0, 0, 0, 0.2);
+  --dialog-bg: #ffffff;
+  --dialog-border: #d4d6da;
+  --dialog-shadow: rgba(0,0,0,0.12);
+  --welcome-icon: #d4d6da;
+  --content-bg: #ffffff;
+}
+
+/* Tailwind 暗色模式通过 JS 在 html 上加 .light class 切换 */
+@custom-variant light (&:where(.light, .light *));
+
+/* ========== 全局基础 ========== */
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* ========== 滚动条 ========== */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ========== 加载动画 ========== */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes overlay-spin { to { transform: rotate(360deg); } }
+
+/* ========== PDF 加载遮罩 ========== */
+.pdf-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f1117;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.pdf-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  background: var(--dialog-bg);
+  border: 1px solid var(--dialog-border);
+  border-radius: 16px;
+  padding: 40px 48px;
+  box-shadow: 0 20px 60px var(--dialog-shadow);
+}
+
+.pdf-overlay-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: overlay-spin 0.7s linear infinite;
+}
+
+.pdf-overlay-label {
+  font-size: 14px;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* ========== Tooltip fade ========== */
+.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }

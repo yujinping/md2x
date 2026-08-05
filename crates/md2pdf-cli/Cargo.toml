@@ -1,0 +1,13 @@
+[package]
+name = "md2pdf-cli"
+version = "0.3.7"
+edition = "2021"
+description = "md2pdf CLI tool - Convert Markdown files to PDF"
+
+[dependencies]
+md2pdf-core = { path = "../md2pdf-core" }
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "md2pdf"
+path = "src/main.rs"
