@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{TITLE}}</title>
+  <base target="_self">
+  <style>{{GITHUB_MD_CSS}}</style>
+  <style>{{ATOM_ONE_DARK_CSS}}</style>
+  <script>{{HIGHLIGHT_JS}}</script>
+  <style>
+    /* ========== 基础重置与字体 ========== */
+    * {
+      box-sizing: border-box;
+    }
+    html {
+      font-size: 16px;
+      scroll-behavior: smooth;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    /* ========== 布局：侧边栏 + 主内容 ========== */
+    .layout {
+      display: flex;
+      max-width: 1200px;
+      margin: 0 auto;
+      min-height: 100vh;
+      position: relative;
+    }
+
+    /* ========== 侧边栏 TOC ========== */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 260px;
+      overflow-y: auto;
+      background: #fff;
+      border-right: 1px solid #e8e8e8;
+      padding: 32px 16px;
+      z-index: 100;
+      transition: width 0.25s ease, padding 0.25s ease, opacity 0.25s ease, border-color 0.25s ease;
+    }
+    .sidebar.resizing {
+      transition: none !important;
+    }
+    .sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .sidebar::-webkit-scrollbar-thumb {
+      background: #ddd;
+      border-radius: 2px;
+    }
+    .sidebar-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #999;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 16px;
+      padding-left: 12px;
+      white-space: nowrap;
+    }
+    /* 侧栏收起状态（仅控制视觉，width 由 JS 管理） */
+    .sidebar.collapsed {
+      opacity: 0;
+      border-right-color: transparent;
+      overflow: hidden;
+      pointer-events: none;
+    }
+    .sidebar.collapsed + .main-content {
+      margin-left: 0 !important;
+    }
+
+    /* ========== 侧栏宽度拖拽手柄 ========== */
+    .sidebar-resizer {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 265px;
+      width: 7px;
+      cursor: col-resize;
+      z-index: 150;
+      background: transparent;
+      transition: background 0.15s, left 0.25s ease;
+    }
+    .sidebar-resizer.resizing {
+      transition: none !important;
+    }
+    .sidebar-resizer:hover,
+    .sidebar-resizer.active {
+      background: #0366d6;
+    }
+    .sidebar-resizer::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 2px;
+      height: 32px;
+      background: #d0d7de;
+      border-radius: 1px;
+      transition: background 0.15s;
+    }
+    .sidebar-resizer:hover::after,
+    .sidebar-resizer.active::after {
+      background: #fff;
+    }
+
+    /* ========== 侧栏切换按钮 ========== */
+    .sidebar-toggle {
+      position: fixed;
+      top: 14px;
+      left: 268px;
+      z-index: 200;
+      width: 34px;
+      height: 34px;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      transition: left 0.25s ease, background 0.15s, box-shadow 0.15s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      user-select: none;
+      padding: 0;
+      outline: none;
+      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 1px;
+    }
+    .sidebar-toggle.resizing {
+      transition: none !important;
+    }
+    .sidebar-toggle:hover {
+      background: #f0f4f8;
+      color: #0366d6;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    .sidebar-toggle:active {
+      background: #e6eaef;
+      transform: scale(0.95);
+    }
+    /* 侧栏收起时按钮移动到左边缘 */
+    body.sidebar-collapsed .sidebar-toggle {
+      left: 14px !important;
+    }
+    body.sidebar-collapsed .sidebar-resizer {
+      display: none !important;
+    }
+    .toc {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .toc li {
+      margin: 0;
+    }
+    .toc a {
+      display: block;
+      padding: 6px 12px;
+      color: #555;
+      text-decoration: none;
+      font-size: 13px;
+      line-height: 1.5;
+      border-radius: 4px;
+      transition: all 0.15s ease;
+      word-break: break-all;
+    }
+    .toc a:hover {
+      color: #0366d6;
+      background: #f0f4f8;
+    }
+    .toc .toc-h1 { padding-left: 12px; font-weight: 600; font-size: 13px; }
+    .toc .toc-h2 { padding-left: 28px; font-size: 13px; }
+    .toc .toc-h3 { padding-left: 44px; font-size: 12px; }
+    .toc .toc-h4 { padding-left: 60px; font-size: 12px; }
+    .toc .toc-h5 { padding-left: 76px; font-size: 11px; }
+    .toc .toc-h6 { padding-left: 92px; font-size: 11px; }
+
+    /* ========== 主内容区 ========== */
+    .main-content {
+      flex: 1;
+      margin-left: 260px;
+      padding: 48px 56px 80px;
+      background: #fff;
+      min-height: 100vh;
+    }
+    .markdown-body {
+      max-width: 860px;
+      margin: 0 auto;
+      font-size: 15px;
+      line-height: 1.75;
+      color: #333;
+      background: transparent;
+      color-scheme: light;
+    }
+
+    /* ========== 覆盖 github-markdown-css 样式 ========== */
+    .markdown-body h1 {
+      font-size: 2em;
+      font-weight: 700;
+      border-bottom: 1px solid #eaecef;
+      padding-bottom: 0.3em;
+      margin-top: 1.5em;
+      margin-bottom: 0.5em;
+    }
+    .markdown-body h1:first-of-type {
+      margin-top: 0;
+    }
+
+    /* ========== SKILL 元数据卡片 ========== */
+    .skill-metadata {
+      background: linear-gradient(135deg, #f6f8fa 0%, #eef1f5 100%);
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      padding: 24px 28px;
+      margin-bottom: 32px;
+    }
+    .skill-metadata-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .skill-metadata-header h1 {
+      margin: 0;
+      font-size: 1.5em;
+      font-weight: 700;
+      border: none;
+      padding: 0;
+      color: #1f2328;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    }
+    .skill-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 2px 10px;
+      border-radius: 12px;
+      background: #0969da;
+      color: #fff;
+      white-space: nowrap;
+    }
+    .skill-description {
+      font-size: 14px;
+      color: #57606a;
+      line-height: 1.6;
+      margin: 0 0 16px 0;
+    }
+    .skill-meta-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+    }
+    .skill-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .skill-meta-label {
+      color: #8b949e;
+      font-weight: 500;
+    }
+    .skill-meta-value {
+      color: #1f2328;
+      font-weight: 600;
+      background: #e6eaef;
+      padding: 1px 8px;
+      border-radius: 4px;
+      font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+    .markdown-body h2 {
+      font-size: 1.6em;
+      font-weight: 700;
+      border-bottom: 1px solid #eaecef;
+      padding-bottom: 0.25em;
+      margin-top: 1.5em;
+      margin-bottom: 0.5em;
+    }
+    .markdown-body h3 {
+      font-size: 1.35em;
+      font-weight: 600;
+      margin-top: 1.4em;
+      margin-bottom: 0.4em;
+    }
+    .markdown-body h4 {
+      font-size: 1.15em;
+      font-weight: 600;
+      margin-top: 1.3em;
+      margin-bottom: 0.3em;
+    }
+    .markdown-body h5, .markdown-body h6 {
+      font-size: 1em;
+      font-weight: 600;
+      margin-top: 1.2em;
+      margin-bottom: 0.3em;
+    }
+    .markdown-body p {
+      margin-top: 0;
+      margin-bottom: 16px;
+      line-height: 1.75;
+    }
+    .markdown-body a {
+      color: #0366d6;
+      text-decoration: none;
+    }
+    .markdown-body a:hover {
+      text-decoration: underline;
+    }
+
+    /* ========== 代码块样式 ========== */
+    .markdown-body pre {
+      background: #282c34 !important;
+      border-radius: 6px;
+      padding: 16px 20px;
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: auto;
+      border: none;
+      position: relative;
+    }
+    .markdown-body pre code {
+      background: transparent !important;
+      padding: 0;
+      font-size: 13px;
+      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+      color: #abb2bf;
+      tab-size: 2;
+    }
+    .markdown-body code {
+      background: rgba(27, 31, 35, 0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.88em;
+      font-family: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+      color: #d63384;
+    }
+    .markdown-body pre code {
+      color: #abb2bf;
+    }
+
+    /* ========== 引用块 ========== */
+    .markdown-body blockquote {
+      margin: 16px 0;
+      padding: 0 1em;
+      color: #6a737d;
+      border-left: 4px solid #dfe2e5;
+      background: #fafbfc;
+      border-radius: 0 4px 4px 0;
+    }
+    .markdown-body blockquote p {
+      margin: 8px 0;
+    }
+
+    /* ========== 表格 ========== */
+    .markdown-body table {
+      display: block !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      overflow: visible !important;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    .markdown-body table th,
+    .markdown-body table td {
+      border: 1px solid #dfe2e5;
+      padding: 8px 12px;
+      text-align: left;
+      vertical-align: top;
+      white-space: normal !important;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      overflow-wrap: anywhere;
+      hyphens: auto;
+      background: #fff;
+    }
+    .markdown-body table th {
+      font-weight: 600;
+      background: #f6f8fa;
+    }
+    /* 覆盖 CDN 样式，确保表格内文本自动换行 */
+    .markdown-body table code,
+    .markdown-body table pre,
+    .markdown-body table pre code {
+      white-space: normal !important;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    /* ========== 任务列表 ========== */
+    .markdown-body .task-list-item {
+      list-style: none;
+    }
+    .markdown-body .task-list-item input[type="checkbox"] {
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    /* ========== 列表 ========== */
+    .markdown-body ul, .markdown-body ol {
+      padding-left: 2em;
+      margin-bottom: 16px;
+    }
+    .markdown-body li {
+      margin: 4px 0;
+    }
+
+    /* ========== 分割线 ========== */
+    .markdown-body hr {
+      height: 1px;
+      background: #eaecef;
+      border: none;
+      margin: 24px 0;
+    }
+
+    /* ========== 图片 ========== */
+    .markdown-body img {
+      max-width: 100%;
+      border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+
+    /* ========== 回到顶部按钮 ========== */
+    .back-to-top {
+      position: fixed;
+      right: 32px;
+      bottom: 40px;
+      z-index: 300;
+      width: 40px;
+      height: 40px;
+      border: 1px solid #d0d7de;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6366f1;
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease, background 0.15s, box-shadow 0.15s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      outline: none;
+      padding: 0;
+    }
+    .back-to-top.visible {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .back-to-top:hover {
+      background: rgba(99,102,241,0.1);
+      border-color: #6366f1;
+      box-shadow: 0 4px 14px rgba(99,102,241,0.2);
+    }
+    .back-to-top:active {
+      transform: translateY(0) scale(0.92);
+    }
+    .back-to-top svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+
+    /* ========== 打印样式 ========== */
+  @media print {
+      .back-to-top {
+        display: none !important;
+      }
+      .sidebar-resizer {
+        display: none !important;
+      }
+      body {
+        background: #fff;
+      }
+      .layout {
+        max-width: none;
+        margin: 0;
+        display: block;
+      }
+      .sidebar {
+        display: none !important;
+      }
+      .sidebar-toggle {
+        display: none !important;
+      }
+      .sidebar-resizer {
+        display: none !important;
+      }
+      .main-content {
+        margin-left: 0 !important;
+        padding: 0;
+        background: #fff;
+        max-width: 100%;
+      }
+      .markdown-body {
+        max-width: 100%;
+        font-size: 12pt;
+        line-height: 1.6;
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+      }
+      .markdown-body pre {
+        background: #f6f8fa !important;
+        border: 1px solid #ddd;
+        page-break-inside: avoid;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .markdown-body pre code {
+        color: #333;
+      }
+      .markdown-body code {
+        color: #d63384;
+      }
+      .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+        page-break-after: avoid;
+      }
+      .markdown-body table {
+        page-break-inside: avoid;
+        max-width: 100% !important;
+      }
+      .markdown-body img {
+        page-break-inside: avoid;
+        box-shadow: none;
+        max-width: 100% !important;
+      }
+      .markdown-body blockquote {
+        background: #fafbfc;
+      }
+      @page {
+        size: A4;
+        margin: 1.5cm 2cm;
+        @bottom-center {
+          content: counter(page) " / " counter(pages);
+          font-size: 9pt;
+          color: #888;
+          font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+      }
+    }
+
+    /* ========== 响应式 ========== */
+    @media (max-width: 900px) {
+      .sidebar {
+        display: none;
+      }
+      .sidebar-toggle {
+        display: none;
+      }
+      .sidebar-resizer {
+        display: none;
+      }
+      .main-content {
+        margin-left: 0 !important;
+        padding: 24px 20px;
+      }
+      .back-to-top {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <button class="sidebar-toggle" id="sidebarToggle" title="切换目录">三</button>
+  <div class="layout">
+    <!-- 侧边栏 TOC -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-title">目录</div>
+      <ul class="toc" id="toc">{{TOC}}</ul>
+    </aside>
+    <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整宽度"></div>
+
+    <!-- 主内容 -->
+    <main class="main-content">
+      <article class="markdown-body">
+        {{SKILL_METADATA}}
+        {{BODY}}
+      </article>
+    </main>
+  </div>
+
+  <button class="back-to-top" id="backToTop" title="回到顶部" aria-label="回到顶部">
+    <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+  <script>
+    try { hljs.highlightAll(); } catch(e) {}
+
+    // ==================== 工具函数 ====================
+    var SIDEBAR_MIN = 180;
+    var SIDEBAR_MAX = function() { return Math.min(600, window.innerWidth * 0.45); };
+    var SIDEBAR_DEFAULT = 260;
+    var SIDEBAR_WIDTH_KEY = 'mpe-sidebar-width';
+    var SIDEBAR_COLLAPSED_KEY = 'sidebarCollapsed';
+
+    function getSavedWidth() {
+      var w = parseInt(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+      return (w >= SIDEBAR_MIN && w <= SIDEBAR_MAX()) ? w : SIDEBAR_DEFAULT;
+    }
+
+    function applySidebarWidth(w) {
+      w = Math.max(SIDEBAR_MIN, Math.min(w, SIDEBAR_MAX()));
+      sidebar.style.width = w + 'px';
+      mainContent.style.marginLeft = w + 'px';
+      toggleBtn.style.left = (w + 8) + 'px';
+      if (resizer) resizer.style.left = (w + 5) + 'px';
+      return w;
+    }
+
+    // ==================== 初始化布局 ====================
+    var toggleBtn = document.getElementById('sidebarToggle');
+    var sidebar = document.getElementById('sidebar');
+    var mainContent = document.querySelector('.main-content');
+    var resizer = document.getElementById('sidebarResizer');
+
+    if (sidebar && mainContent && toggleBtn) {
+      // 从 localStorage 恢复侧栏宽度
+      var savedWidth = getSavedWidth();
+      applySidebarWidth(savedWidth);
+
+      // 从 localStorage 恢复收起状态
+      if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true') {
+        sidebar.classList.add('collapsed');
+        document.body.classList.add('sidebar-collapsed');
+      }
+
+      // ==================== 收起/展开切换 ====================
+      toggleBtn.addEventListener('click', function() {
+        var isCollapsed = sidebar.classList.toggle('collapsed');
+        document.body.classList.toggle('sidebar-collapsed', isCollapsed);
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isCollapsed);
+
+        if (isCollapsed) {
+          // 保存展开宽度供恢复用
+          localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebar.offsetWidth);
+          sidebar.style.width = '0px';
+          sidebar.style.padding = '32px 0px';
+          mainContent.style.marginLeft = '0px';
+          toggleBtn.style.left = '14px';
+          if (resizer) resizer.style.display = 'none';
+        } else {
+          var w = getSavedWidth();
+          sidebar.style.width = w + 'px';
+          sidebar.style.padding = '';
+          mainContent.style.marginLeft = w + 'px';
+          toggleBtn.style.left = (w + 8) + 'px';
+          if (resizer) {
+            resizer.style.display = '';
+            resizer.style.left = (w + 5) + 'px';
+          }
+        }
+      });
+
+      // ==================== 拖拽调整宽度 ====================
+      if (resizer) {
+        var isResizing = false;
+        var startX, startW;
+
+        resizer.addEventListener('mousedown', function(e) {
+          // 收起状态不允许拖动
+          if (sidebar.classList.contains('collapsed')) return;
+          isResizing = true;
+          startX = e.clientX;
+          startW = sidebar.offsetWidth;
+          resizer.classList.add('active');
+          sidebar.classList.add('resizing');
+          toggleBtn.classList.add('resizing');
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', function(e) {
+          if (!isResizing) return;
+          var newW = startW + (e.clientX - startX);
+          newW = Math.max(SIDEBAR_MIN, Math.min(newW, SIDEBAR_MAX()));
+          applySidebarWidth(newW);
+        });
+
+        document.addEventListener('mouseup', function() {
+          if (!isResizing) return;
+          isResizing = false;
+          resizer.classList.remove('active');
+          sidebar.classList.remove('resizing');
+          toggleBtn.classList.remove('resizing');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebar.offsetWidth);
+        });
+      }
+    }
+
+    // ==================== TOC 锚点 ====================
+    document.querySelectorAll('.toc a').forEach(function(a) {
+      a.addEventListener('click', function(e) {
+        e.preventDefault();
+        var id = this.getAttribute('href').replace('#', '');
+        var el = document.getElementById(id);
+        if (el) el.scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+
+    // ==================== 回到顶部 ====================
+    var backBtn = document.getElementById('backToTop');
+    if (backBtn) {
+      var scrollThreshold = window.innerHeight * 0.6;
+
+      window.addEventListener('scroll', function() {
+        if (window.scrollY > scrollThreshold) {
+          backBtn.classList.add('visible');
+        } else {
+          backBtn.classList.remove('visible');
+        }
+      });
+
+      backBtn.addEventListener('click', function() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    }
+  </script>
+</body>
+</html>
