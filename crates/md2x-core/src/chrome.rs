@@ -77,6 +77,29 @@ pub fn generate_pdf(html_path: &str, pdf_path: &str) -> Result<(), MpeError> {
     Ok(())
 }
 
+/// 生成 PNG 截图（无头 Chrome / Edge）
+pub fn generate_png(html_path: &str, png_path: &str) -> Result<(), MpeError> {
+    let chrome = find_chrome()?;
+    let abs_html = std::fs::canonicalize(html_path).map_err(MpeError::IoError)?;
+
+    let output = Command::new(&chrome)
+        .args([
+            "--headless=new",
+            "--hide-scrollbars",
+            "--window-size=1920,1080",
+            &format!("--screenshot={}", png_path),
+            &format!("file://{}", abs_html.display()),
+        ])
+        .output()
+        .map_err(MpeError::IoError)?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(MpeError::ScreenshotGenerationFailed(stderr.to_string()));
+    }
+    Ok(())
+}
+
 /// 用系统默认应用程序打开 PDF
 /// - macOS: `open`
 /// - Windows: `cmd /c start`

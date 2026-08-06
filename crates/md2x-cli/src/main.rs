@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use md2x_core::chrome;
 use md2x_core::converter;
 use md2x_core::error;
@@ -12,9 +12,20 @@ struct Cli {
     /// Path to the markdown file
     file: String,
 
-    /// Open the generated PDF with the default application
+    /// Output format: pdf, html or png
+    #[arg(long, value_enum, default_value_t = OutputFormat::Pdf)]
+    format: OutputFormat,
+
+    /// Open the generated PDF with the default application (only for pdf)
     #[arg(long)]
     preview: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum OutputFormat {
+    Pdf,
+    Html,
+    Png,
 }
 
 fn run() -> Result<(), error::MpeError> {
@@ -53,30 +64,46 @@ fn run() -> Result<(), error::MpeError> {
     // 渲染完整 HTML
     let full_html = template::render_html_template_with_metadata(&html_body, title, metadata.as_ref());
 
-    // 临时 HTML 文件（用于生成 PDF）
-    let temp_dir = std::env::temp_dir().join("rust-mpe-browser");
-    std::fs::create_dir_all(&temp_dir).map_err(error::MpeError::IoError)?;
-    let file_stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("output");
-    let html_path = temp_dir.join(format!("{}.html", file_stem));
+    // 按输出格式分发：HTML 直接写出，PDF / PNG 先渲染到临时 HTML 再交给 Chrome
+    match cli.format {
+        OutputFormat::Html => {
+            let html_path = path.with_extension("html");
+            std::fs::write(&html_path, full_html).map_err(error::MpeError::IoError)?;
+        }
+        OutputFormat::Pdf | OutputFormat::Png => {
+            let temp_dir = std::env::temp_dir().join("rust-mpe-browser");
+            std::fs::create_dir_all(&temp_dir).map_err(error::MpeError::IoError)?;
+            let file_stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("output");
+            let html_path = temp_dir.join(format!("{}.html", file_stem));
 
-    // 写出临时 HTML
-    std::fs::write(&html_path, full_html).map_err(error::MpeError::IoError)?;
+            // 写出临时 HTML
+            std::fs::write(&html_path, full_html).map_err(error::MpeError::IoError)?;
 
-    // 生成 PDF
-    let pdf_path = path.with_extension("pdf");
-    let html_str = html_path.to_string_lossy();
-    let pdf_str = pdf_path.to_string_lossy();
-    chrome::generate_pdf(&html_str, &pdf_str)?;
+            if let OutputFormat::Pdf = cli.format {
+                // 生成 PDF
+                let pdf_path = path.with_extension("pdf");
+                let html_str = html_path.to_string_lossy();
+                let pdf_str = pdf_path.to_string_lossy();
+                chrome::generate_pdf(&html_str, &pdf_str)?;
 
-    // 清理临时 HTML
-    let _ = std::fs::remove_file(&html_path);
+                // 用默认应用程序打开 PDF
+                if cli.preview {
+                    chrome::open_pdf(&pdf_str)?;
+                }
+            } else {
+                // 生成 PNG 截图
+                let png_path = path.with_extension("png");
+                let html_str = html_path.to_string_lossy();
+                let png_str = png_path.to_string_lossy();
+                chrome::generate_png(&html_str, &png_str)?;
+            }
 
-    // 用默认应用程序打开 PDF
-    if cli.preview {
-        chrome::open_pdf(&pdf_str)?;
+            // 清理临时 HTML
+            let _ = std::fs::remove_file(&html_path);
+        }
     }
 
     Ok(())

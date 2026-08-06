@@ -6,6 +6,7 @@ pub enum MpeError {
     FileNotFound(String),
     ChromeNotFound,
     PdfGenerationFailed(String),
+    ScreenshotGenerationFailed(String),
     IoError(io::Error),
 }
 
@@ -17,6 +18,9 @@ impl fmt::Display for MpeError {
                 write!(f, "Chrome not found. Please install Google Chrome")
             }
             MpeError::PdfGenerationFailed(msg) => write!(f, "PDF generation failed: {msg}"),
+            MpeError::ScreenshotGenerationFailed(msg) => {
+                write!(f, "PNG screenshot generation failed: {msg}")
+            }
             MpeError::IoError(e) => write!(f, "IO error: {e}"),
         }
     }
