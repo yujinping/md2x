@@ -1,8 +1,14 @@
 ## [unreleased]
 
+### 🚀 Features
+
+- *(release)* Auto-generate RELEASE_NOTES.md from changelog
+## [0.1.2] - 2026-08-06
+
 ### ⚙️ Miscellaneous Tasks
 
 - *(release)* Use gh CLI to create release and upload only installer artifacts
+- Release v0.1.2
 ## [0.1.1] - 2026-08-06
 
 ### 🚀 Features
