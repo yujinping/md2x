@@ -134,11 +134,13 @@ git-cliff -o CHANGELOG.md
 echo "已生成 CHANGELOG.md"
 
 # ---- 提交 / 打 tag / 推送 ----
-git add Cargo.toml Cargo.lock CHANGELOG.md
+git add Cargo.toml Cargo.lock CHANGELOG.md \
+    crates/md2x-core/Cargo.toml crates/md2x-cli/Cargo.toml crates/md2x-gui/Cargo.toml \
+    crates/md2x-gui/tauri.conf.json
 [ -f RELEASE_NOTES.md ] && git add RELEASE_NOTES.md
 git commit -m "chore: release $TAG"
 git tag "$TAG"
 
 git push origin main
 git push origin "$TAG"
-echo "已发布 $TAG：$REPO_URL/releases/tag/$TAG"
+echo "已发布 ${TAG}：${REPO_URL}/releases/tag/${TAG}"
