@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# md2x 一键发版脚本：bump 版本 -> 生成 CHANGELOG -> 提交 -> 打 tag -> 推送（触发 CI 构建并自动发布 Release）
-# 用法：./release.sh [--dry-run] <版本号>     例：./release.sh 0.1.2 或 ./release.sh v0.1.2
+# md2x 通用发版脚本（Rust 项目）：自动检测仓库 / 版本文件 / 默认分支
+# 用法：release [--install] [--dry-run] <版本号>     例：release 0.1.2 或 release v0.1.2
 set -euo pipefail
 
-REPO_URL="https://github.com/yujinping/md2x"
+# ---- 安装模式：符号链接到 ~/.local/bin/release ----
+if [ "${1:-}" = "--install" ]; then
+    INSTALL_DIR="${HOME}/.local/bin"
+    mkdir -p "$INSTALL_DIR"
+    REAL="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+    ln -sf "$REAL" "$INSTALL_DIR/release"
+    chmod +x "$INSTALL_DIR/release"
+    echo "已安装 release -> $INSTALL_DIR/release"
+    echo "请确保 $INSTALL_DIR 已加入 PATH"
+    exit 0
+fi
 
 DRY=0
 if [ "${1:-}" = "--dry-run" ]; then
@@ -12,8 +22,8 @@ if [ "${1:-}" = "--dry-run" ]; then
 fi
 
 if [ $# -ne 1 ]; then
-    echo "用法: ./release.sh [--dry-run] <版本号>"
-    echo "  例: ./release.sh 0.1.2   或   ./release.sh v0.1.2"
+    echo "用法: release [--install] [--dry-run] <版本号>"
+    echo "  例: release 0.1.2   或   release v0.1.2"
     exit 1
 fi
 
@@ -25,9 +35,66 @@ if ! echo "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
     exit 1
 fi
 
+# ---- 检测：远程仓库（GitHub HTTPS / SSH）----
+detect_repo() {
+    local url
+    url="$(git remote get-url origin 2>/dev/null || true)"
+    [ -n "$url" ] || { echo "错误: 未找到 origin remote，请先 git remote add origin <url>"; exit 1; }
+    local owner repo
+    if [[ "$url" =~ ^https?://[^/]+/([^/]+)/([^/]+)(\.git)?/?$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]%.git}"
+    elif [[ "$url" =~ ^git@[^:]+:([^/]+)/([^/]+)(\.git)?$ ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]%.git}"
+    else
+        echo "错误: 无法解析 origin URL: $url（仅支持 GitHub HTTPS/SSH）"
+        exit 1
+    fi
+    REPO_URL="https://github.com/${owner}/${repo}"
+    PROJECT_NAME="$repo"
+}
+detect_repo
+
+# ---- 检测：默认分支 ----
+detect_default_branch() {
+    DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    [ -n "${DEFAULT_BRANCH:-}" ] || DEFAULT_BRANCH="main"
+}
+detect_default_branch
+
+# ---- 检测：版本文件（cargo workspace / 单 crate + tauri.conf.json）----
+detect_version_files() {
+    VERSION_FILES=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && VERSION_FILES+=("$f")
+    done < <(python3 - <<'PY'
+import json, os, subprocess, sys
+try:
+    meta = json.loads(subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        capture_output=True, text=True, check=True,
+    ).stdout)
+except Exception:
+    print("错误: cargo metadata 失败，请确认在 Rust 项目根目录执行", file=sys.stderr)
+    sys.exit(1)
+files = set()
+if meta.get("workspace_root"):
+    files.add(os.path.normpath(os.path.relpath(meta["workspace_root"]) + "/Cargo.toml"))
+for p in meta.get("packages", []):
+    files.add(os.path.normpath(os.path.relpath(p["manifest_path"])))
+print("\n".join(sorted(files)))
+PY
+)
+    while IFS= read -r f; do
+        [ -n "$f" ] && VERSION_FILES+=("$f")
+    done < <(find . -name tauri.conf.json -not -path './.git/*' -not -path './target/*' -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' || true)
+}
+detect_version_files
+
 # ---- 前置检查 ----
 command -v git-cliff >/dev/null 2>&1 || { echo "错误: 缺少 git-cliff，请先安装（cargo install git-cliff）"; exit 1; }
-[ "$(git branch --show-current)" = "main" ] || { echo "错误: 请先切换到 main 分支"; exit 1; }
+[ "$(git branch --show-current)" = "$DEFAULT_BRANCH" ] || { echo "错误: 请先切换到 $DEFAULT_BRANCH 分支"; exit 1; }
 # 允许 RELEASE_NOTES.md 保持未提交（发版说明随本次发布一起提交）
 DIRTY="$(git status --porcelain | grep -v 'M RELEASE_NOTES.md' || true)"
 if [ -n "$DIRTY" ]; then
@@ -50,11 +117,11 @@ if [ -f RELEASE_NOTES.md ] && ! grep -q '（示例：' RELEASE_NOTES.md && ! gre
 fi
 
 echo "================================================"
-echo "将发布 md2x $TAG"
-echo "  1. bump workspace / crates / tauri.conf.json / Cargo.lock  ->  $VER"
+echo "将发布 $PROJECT_NAME $TAG"
+echo "  1. bump ${#VERSION_FILES[@]} 个版本文件 ->  $VER（cargo 自动同步 Cargo.lock）"
 echo "  2. git-cliff 生成 CHANGELOG.md，并自动生成 RELEASE_NOTES.md"
 echo "  3. 提交 'chore: release $TAG' 并打 tag"
-echo "  4. push main 与 tag（触发 CI 构建，tag 自动发布 GitHub Release）"
+echo "  4. push $DEFAULT_BRANCH 与 tag（触发 CI 构建，tag 自动发布 GitHub Release）"
 echo "================================================"
 if [ "$DRY" = "1" ]; then
     echo "[dry-run] 未执行任何修改，以上为将执行的操作"
@@ -66,68 +133,62 @@ case "$ans" in
     *) echo "已取消"; exit 1 ;;
 esac
 
-# ---- bump 版本（workspace、三个 crate、tauri.conf.json 与 Cargo.lock）----
-python3 - "$VER" <<'PY'
-import re, sys
-from pathlib import Path
+# ---- bump 版本（版本文件列表 + cargo 刷新 Cargo.lock）----
+python3 - "$VER" "${VERSION_FILES[@]}" <<'PY'
+import os, re, sys
 
 ver = sys.argv[1]
-
-def bump(path, pattern, repl):
-    """将文件中第一个匹配的版本号替换为新版本，找不到则报错"""
-    p = Path(path)
-    if not p.exists():
-        print(f"错误: 缺少文件 {path}")
-        return False
-    new_s, n = pattern.subn(repl, p.read_text(), count=1)
-    if n == 0:
-        print(f"错误: {path} 中未找到版本号")
-        return False
-    p.write_text(new_s)
-    print(f"bump {path} -> {ver}")
-    return True
-
+files = sys.argv[2:]
 ok = True
+names = []
+for path in files:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            s = fh.read()
+    except FileNotFoundError:
+        print(f"错误: 缺少文件 {path}")
+        ok = False
+        continue
+    m = re.search(r'^name = "([^"]+)"', s, re.M)
+    if m:
+        names.append(m.group(1))
+    if path.endswith(".json"):
+        pattern = re.compile(r'^\s*"version": "[^"]+"', re.M)
+        repl = f'  "version": "{ver}"'
+    else:
+        pattern = re.compile(r'^version = "[^"]+"', re.M)
+        repl = f'version = "{ver}"'
+    new_s, n = pattern.subn(repl, s, count=1)
+    if n == 0:
+        # workspace 继承（version = { workspace = true }）无需单独 bump
+        print(f"跳过 {path}（无独立版本字段，可能为 workspace 继承）")
+        continue
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(new_s)
+    print(f"bump {path} -> {ver}")
 
-# 根 workspace 与三个 crate 的版本号（每个文件只含一个 version 字段）
-for path in (
-    "Cargo.toml",
-    "crates/md2x-core/Cargo.toml",
-    "crates/md2x-cli/Cargo.toml",
-    "crates/md2x-gui/Cargo.toml",
-):
-    ok &= bump(path, re.compile(r'^version = "[^"]+"', re.M), f'version = "{ver}"')
-
-# Tauri 应用版本（GUI 打包产物的版本）
-ok &= bump(
-    "crates/md2x-gui/tauri.conf.json",
-    re.compile(r'^  "version": "[^"]+"', re.M),
-    f'  "version": "{ver}"',
-)
-
-# Cargo.lock：仅更新本仓库三个包，避免误伤同版本号的第三方依赖
-lock_path = Path("Cargo.lock")
-if not lock_path.exists():
-    print("错误: 缺少文件 Cargo.lock")
-    ok = False
-else:
-    lock = lock_path.read_text()
-    for pkg in ("md2x-core", "md2x-cli", "md2x-gui"):
+# 更新 Cargo.lock 中本仓库包的版本（避免误伤同版本号的第三方依赖）
+if os.path.exists("Cargo.lock"):
+    with open("Cargo.lock", encoding="utf-8") as fh:
+        lock = fh.read()
+    for name in names:
         lock, n = re.subn(
-            rf'(name = "{pkg}"\nversion = ")[^"]+(")',
+            rf'(name = "{name}"\nversion = ")[^"]+(")',
             rf"\g<1>{ver}\g<2>",
             lock,
             count=1,
         )
         if n == 0:
-            print(f"错误: Cargo.lock 中未找到 {pkg} 包")
-            ok = False
-    if ok:
-        lock_path.write_text(lock)
-        print(f"bump Cargo.lock（md2x-core / md2x-cli / md2x-gui）-> {ver}")
-
+            print(f"警告: Cargo.lock 中未找到 {name} 包")
+    with open("Cargo.lock", "w", encoding="utf-8") as fh:
+        fh.write(lock)
+    print(f"bump Cargo.lock（{'、'.join(names)}）-> {ver}")
 sys.exit(0 if ok else 1)
 PY
+
+# 校验 Cargo.lock 与 manifest 一致（cargo 会按需补充缺失条目）
+cargo metadata --no-deps --format-version 1 >/dev/null
+echo "已同步 Cargo.lock"
 
 # ---- 生成 CHANGELOG ----
 git-cliff -o CHANGELOG.md
@@ -164,13 +225,11 @@ print("已生成 RELEASE_NOTES.md（CHANGELOG 无 unreleased 内容，使用占�
 PY
 
 # ---- 提交 / 打 tag / 推送 ----
-git add Cargo.toml Cargo.lock CHANGELOG.md \
-    crates/md2x-core/Cargo.toml crates/md2x-cli/Cargo.toml crates/md2x-gui/Cargo.toml \
-    crates/md2x-gui/tauri.conf.json
+git add Cargo.lock CHANGELOG.md "${VERSION_FILES[@]}"
 [ -f RELEASE_NOTES.md ] && git add RELEASE_NOTES.md
 git commit -m "chore: release $TAG"
 git tag "$TAG"
 
-git push origin main
+git push origin "$DEFAULT_BRANCH"
 git push origin "$TAG"
 echo "已发布 ${TAG}：${REPO_URL}/releases/tag/${TAG}"
