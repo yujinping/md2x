@@ -1,5 +1,10 @@
 ## [unreleased]
 
+### ⚙️ Miscellaneous Tasks
+
+- *(release)* Use gh CLI to create release and upload only installer artifacts
+## [0.1.1] - 2026-08-06
+
 ### 🚀 Features
 
 - 初始化 md2x workspace
@@ -21,3 +26,4 @@
 - 推送 main 时自动构建三平台产物
 - Release v0.1.1
 - Sync crate versions to 0.1.1
+- Release v0.1.1
