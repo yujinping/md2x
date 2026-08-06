@@ -16,6 +16,14 @@ md2x-project/
 └── docs/                      # 文档
 ```
 
+## 系统要求
+
+- **macOS**：macOS 11.0（Big Sur）或更高版本；安装包为 Universal 格式，Intel 与 Apple Silicon 通用
+- **Windows**：Windows 10 或更高版本（NSIS 安装包）
+- **Linux**：基于 deb 的发行版（如 Ubuntu 22.04+），安装时需自动拉取 WebKitGTK 4.1 等依赖
+
+> 提示：PDF / PNG 输出依赖本机已安装的 Chrome、Chromium 或 Edge 浏览器。
+
 ## 快速开始
 
 ### CLI 模式
