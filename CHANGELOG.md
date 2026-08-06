@@ -1,5 +1,14 @@
 ## [unreleased]
 
+### 🚜 Refactor
+
+- *(ci)* 将macOS通用构建拆分为独立步骤
+
+### 📚 Documentation
+
+- *(README)* 添加系统要求说明与macOS最低版本配置
+## [0.1.5] - 2026-08-06
+
 ### 🚀 Features
 
 - *(ci)* 支持macOS universal构建并移除AppImage和MSI
@@ -21,6 +30,7 @@
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* 移除主干推送触发，仅保留标签触发
+- Release v0.1.5
 ## [0.1.3] - 2026-08-06
 
 ### 🚀 Features
