@@ -2,13 +2,13 @@
 
 ## 概述
 
-md2pdf 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分离。
+md2x 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分离。
 
 ```
 ┌──────────────────────────────────────────────────┐
 │                  用户界面层                       │
 │  ┌─────────────┐         ┌───────────────────┐   │
-│  │ md2pdf-cli  │         │  md2pdf-gui       │   │
+│  │ md2x-cli  │         │  md2x-gui       │   │
 │  │ (CLAP 解析)  │         │  (Tauri 2 + Vue)  │   │
 │  └──────┬──────┘         └────────┬──────────┘   │
 │         │                         │              │
@@ -17,7 +17,7 @@ md2pdf 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分
           ▼                         ▼
 ┌───────────────────────────────────────────────┐
 │             核心引擎层                          │
-│         md2pdf-core (lib crate)               │
+│         md2x-core (lib crate)               │
 │                                               │
 │  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
 │  │converter │  │ template │  │   chrome    │  │
@@ -34,9 +34,9 @@ md2pdf 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分
 
 ## Crate 依赖关系
 
-- **md2pdf-core** — 零界面依赖，只依赖 `comrak`。提供 4 个 public module
-- **md2pdf-cli** — 依赖 `md2pdf-core` + `clap`。纯 CLI 二进制
-- **md2pdf-gui** — 依赖 `md2pdf-core` + `tauri 2` + `serde` + `tokio`。Tauri 桌面壳
+- **md2x-core** — 零界面依赖，只依赖 `comrak`。提供 4 个 public module
+- **md2x-cli** — 依赖 `md2x-core` + `clap`。纯 CLI 二进制
+- **md2x-gui** — 依赖 `md2x-core` + `tauri 2` + `serde` + `tokio`。Tauri 桌面壳
 
 ## 核心模块职责
 
@@ -63,7 +63,7 @@ md2pdf 采用三层的 Rust workspace 架构，核心逻辑与界面层完全分
 核心库中的 `template.rs` 使用 `include_str!` 编译期嵌入模板文件：
 
 ```
-crates/md2pdf-core/src/template.rs
+crates/md2x-core/src/template.rs
   → ../../../templates/mpe.html
   → ../../../templates/assets/*.css
   → ../../../templates/assets/*.js
@@ -71,7 +71,7 @@ crates/md2pdf-core/src/template.rs
 
 ## 双模式入口 (GUI)
 
-`md2pdf-gui` 的 `main.rs` 支持三种启动方式：
+`md2x-gui` 的 `main.rs` 支持三种启动方式：
 1. `--pdf <file>` → CLI 模式，静默生成 PDF
-2. `./md2pdf <file>` → GUI 模式，自动打开文件
+2. `./md2x <file>` → GUI 模式，自动打开文件
 3. 无参数 → 纯 GUI 模式

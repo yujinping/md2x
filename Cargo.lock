@@ -1933,15 +1933,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "md2pdf-cli"
+name = "md2x-cli"
 version = "0.3.7"
 dependencies = [
  "clap",
- "md2pdf-core",
+ "md2x-core",
 ]
 
 [[package]]
-name = "md2pdf-core"
+name = "md2x-core"
 version = "0.3.7"
 dependencies = [
  "comrak",
@@ -1949,10 +1949,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "md2pdf-gui"
+name = "md2x-gui"
 version = "0.3.7"
 dependencies = [
- "md2pdf-core",
+ "md2x-core",
  "serde",
  "tauri",
  "tauri-build",

@@ -31,7 +31,7 @@ function onOverlayClick(e) {
         <rect x="6" y="6" width="20" height="36" rx="2" ry="2"/>
         <path d="M30 16l12-4v24l-12 4V16z"/><path d="M30 16l-4-2"/><path d="M42 12l-4-2"/>
       </svg>
-      <div class="text-[17px] font-bold tracking-tight mb-1" :style="{ color: 'var(--text)' }">md2pdf</div>
+      <div class="text-[17px] font-bold tracking-tight mb-1" :style="{ color: 'var(--text)' }">md2x</div>
       <div class="text-xs font-mono font-medium mb-3" :style="{ color: 'var(--accent)' }">{{ version }}</div>
       <div class="text-sm mb-4 leading-relaxed" :style="{ color: 'var(--text-muted)' }">{{ t('aboutDesc', settings.lang) }}</div>
       <div class="w-full h-px mb-4" :style="{ background: 'var(--border)' }"></div>

@@ -10,14 +10,14 @@ fn main() {
         let file = if pos + 1 < args.len() {
             &args[pos + 1]
         } else {
-            eprintln!("Usage: md2pdf --pdf <file.md>");
+            eprintln!("Usage: md2x --pdf <file.md>");
             std::process::exit(1);
         };
         cli_run(file);
     } else if args.len() > 1 {
         // 有文件参数但无 --pdf → GUI 模式，通过环境变量传递路径
         let file = &args[1];
-        std::env::set_var("MD2PDF_GUI_FILE", file);
+        std::env::set_var("MD2X_GUI_FILE", file);
         gui_run();
     } else {
         // 无参数 → 启动 GUI
@@ -32,7 +32,7 @@ fn cli_run(file: &str) {
         std::process::exit(1);
     }
 
-    match md2pdf_gui_lib::generate_pdf_from_file(path) {
+    match md2x_gui_lib::generate_pdf_from_file(path) {
         Ok(pdf_path) => {
             println!("PDF generated: {}", pdf_path.display());
         }
@@ -44,5 +44,5 @@ fn cli_run(file: &str) {
 }
 
 fn gui_run() {
-    md2pdf_gui_lib::run()
+    md2x_gui_lib::run()
 }

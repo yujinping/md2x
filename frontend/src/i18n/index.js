@@ -12,8 +12,8 @@ export const i18n = {
     aboutTech: '基于 Tauri v2 · Chrome 无头渲染',
     pdfOverlayPreparing: '正在准备 PDF 预览…',
     dropOrOpen: '或拖入 .md 文件',
-    hintMac: '在 Finder 中将 .md 设为默认打开程序：<br>右键 .md 文件 → 显示简介 → 打开方式 → md2pdf → 全部更改',
-    hintWin: '在资源管理器中将 .md 设为默认打开程序：<br>右键 .md 文件 → 打开方式 → 选择其他应用 → md2pdf → 始终使用',
+    hintMac: '在 Finder 中将 .md 设为默认打开程序：<br>右键 .md 文件 → 显示简介 → 打开方式 → md2x → 全部更改',
+    hintWin: '在资源管理器中将 .md 设为默认打开程序：<br>右键 .md 文件 → 打开方式 → 选择其他应用 → md2x → 始终使用',
     apiUnavailable: 'Tauri API 不可用',
   },
   'en': {
@@ -29,8 +29,8 @@ export const i18n = {
     aboutTech: 'Powered by Tauri v2 · Chrome headless',
     pdfOverlayPreparing: 'Preparing PDF preview…',
     dropOrOpen: 'or drop a .md file',
-    hintMac: 'Set .md as default in Finder:<br>Right-click .md → Get Info → Open with → md2pdf → Change All',
-    hintWin: 'Set .md as default in File Explorer:<br>Right-click .md → Open with → Choose another app → md2pdf → Always use',
+    hintMac: 'Set .md as default in Finder:<br>Right-click .md → Get Info → Open with → md2x → Change All',
+    hintWin: 'Set .md as default in File Explorer:<br>Right-click .md → Open with → Choose another app → md2x → Always use',
     apiUnavailable: 'Tauri API unavailable',
   }
 }

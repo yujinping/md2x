@@ -6,7 +6,7 @@ frontend/node_modules/
 frontend/dist/
 
 # Tauri
-crates/md2pdf-gui/gen/
+crates/md2x-gui/gen/
 
 # IDE
 .vscode/

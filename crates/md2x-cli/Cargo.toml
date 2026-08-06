@@ -1,0 +1,13 @@
+[package]
+name = "md2x-cli"
+version = "0.3.7"
+edition = "2021"
+description = "md2x CLI tool - Convert Markdown files to PDF"
+
+[dependencies]
+md2x-core = { path = "../md2x-core" }
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "md2x"
+path = "src/main.rs"

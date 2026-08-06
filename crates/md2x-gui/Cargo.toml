@@ -1,15 +1,15 @@
 [package]
-name = "md2pdf-gui"
+name = "md2x-gui"
 version = "0.3.7"
 edition = "2021"
-description = "md2pdf desktop application powered by Tauri 2"
+description = "md2x desktop application powered by Tauri 2"
 
 [lib]
-name = "md2pdf_gui_lib"
+name = "md2x_gui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-md2pdf-core = { path = "../md2pdf-core" }
+md2x-core = { path = "../md2x-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }

@@ -1,7 +1,7 @@
-use md2pdf_core::chrome;
-use md2pdf_core::converter;
-use md2pdf_core::error::MpeError;
-use md2pdf_core::template;
+use md2x_core::chrome;
+use md2x_core::converter;
+use md2x_core::error::MpeError;
+use md2x_core::template;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -47,7 +47,7 @@ struct PreviewResult {
 }
 
 pub fn run() {
-    let f = std::env::var("MD2PDF_GUI_FILE").ok();
+    let f = std::env::var("MD2X_GUI_FILE").ok();
     let s = AppState {
         current_file: Mutex::new(f.as_ref().map(|s| PathBuf::from(s))),
         last_known_mtime: Mutex::new(None),
@@ -92,7 +92,7 @@ pub fn run() {
                 .build(app)?;
             let menu = tauri::menu::MenuBuilder::new(app)
                 .item(
-                    &tauri::menu::SubmenuBuilder::new(app, "md2pdf")
+                    &tauri::menu::SubmenuBuilder::new(app, "md2x")
                         .item(&about_item)
                         .separator()
                         .item(&settings_item)

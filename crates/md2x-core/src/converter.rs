@@ -118,7 +118,7 @@ fn try_resolve_src(tag: &str, base: &Path, hugo_root: Option<&Path>) -> String {
 
 /// 下载远程图片并转为 data URI 字符串
 fn download_image_as_data_uri(url: &str) -> Option<String> {
-    let resp = ureq::get(url).set("User-Agent", "md2pdf/0.1").call().ok()?;
+    let resp = ureq::get(url).set("User-Agent", "md2x/0.1").call().ok()?;
 
     let mime = resp
         .header("content-type")

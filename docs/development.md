@@ -18,8 +18,8 @@ cargo build --workspace
 ### 运行 CLI
 
 ```bash
-cargo run -p md2pdf-cli -- path/to/file.md
-cargo run -p md2pdf-cli -- path/to/file.md --preview
+cargo run -p md2x-cli -- path/to/file.md
+cargo run -p md2x-cli -- path/to/file.md --preview
 ```
 
 ### 运行 GUI（需要先构建前端）
@@ -29,14 +29,14 @@ cargo run -p md2pdf-cli -- path/to/file.md --preview
 cd frontend && npm install && npm run dev
 
 # 终端 2：Tauri 开发模式
-cargo tauri dev --manifest-path crates/md2pdf-gui/Cargo.toml
+cargo tauri dev --manifest-path crates/md2x-gui/Cargo.toml
 ```
 
 ### 运行测试
 
 ```bash
 # 核心库单元测试
-cargo test -p md2pdf-core
+cargo test -p md2x-core
 
 # 全部测试
 cargo test --workspace
@@ -46,12 +46,12 @@ cargo test --workspace
 
 ```bash
 # CLI
-cargo build -p md2pdf-cli --release
-# 产物: target/release/md2pdf
+cargo build -p md2x-cli --release
+# 产物: target/release/md2x
 
 # GUI (Tauri 打包)
-cargo tauri build --manifest-path crates/md2pdf-gui/Cargo.toml
-# 产物: crates/md2pdf-gui/target/release/bundle/
+cargo tauri build --manifest-path crates/md2x-gui/Cargo.toml
+# 产物: crates/md2x-gui/target/release/bundle/
 ```
 
 ## 前端开发
@@ -68,10 +68,10 @@ npm run build      # 构建到 dist/
 ## 版本号管理
 
 版本号在以下文件中同步维护：
-- `crates/md2pdf-core/Cargo.toml`
-- `crates/md2pdf-cli/Cargo.toml`
-- `crates/md2pdf-gui/Cargo.toml`
-- `crates/md2pdf-gui/tauri.conf.json`
+- `crates/md2x-core/Cargo.toml`
+- `crates/md2x-cli/Cargo.toml`
+- `crates/md2x-gui/Cargo.toml`
+- `crates/md2x-gui/tauri.conf.json`
 
 可使用原有 `bump.js` 脚本（需复制到新位置后调整路径）。
 

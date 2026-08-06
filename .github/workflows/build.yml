@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
@@ -14,15 +15,15 @@ jobs:
         include:
           - platform: linux
             os: ubuntu-latest
-            cli_artifact: target/release/md2pdf-cli
+            cli_artifact: target/release/md2x-cli
             gui_bundles: deb,appimage
           - platform: macos
             os: macos-latest
-            cli_artifact: target/release/md2pdf-cli
+            cli_artifact: target/release/md2x-cli
             gui_bundles: dmg
           - platform: windows
             os: windows-latest
-            cli_artifact: target/release/md2pdf-cli.exe
+            cli_artifact: target/release/md2x-cli.exe
             gui_bundles: nsis,msi
     runs-on: ${{ matrix.os }}
     steps:
@@ -48,7 +49,7 @@ jobs:
             libssl-dev
 
       - name: Build CLI (release)
-        run: cargo build --release -p md2pdf-cli
+        run: cargo build --release -p md2x-cli
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
@@ -76,7 +77,7 @@ jobs:
         run: cargo install tauri-cli --version "^2" --locked
 
       - name: Build GUI bundles
-        working-directory: crates/md2pdf-gui
+        working-directory: crates/md2x-gui
         run: cargo tauri build --bundles ${{ matrix.gui_bundles }}
 
       - name: Upload GUI artifact
@@ -84,3 +85,36 @@ jobs:
         with:
           name: md2x-gui-${{ matrix.platform }}
           path: target/release/bundle/**
+
+  release:
+    name: 发布 GitHub Release
+    needs: build
+    # 仅 tag 推送（v*）时创建 Release，push main 只构建不发布
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # RELEASE_NOTES.md 缺失时给出占位说明，避免 body_path 指向不存在的文件
+      - name: 准备发布说明
+        run: |
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "本版本由 CI 自动发布。发版前可在 RELEASE_NOTES.md 中补充详细说明。" > RELEASE_NOTES.md
+          fi
+
+      - name: 下载三平台构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/**/*
+          fail_on_unmatched_files: false

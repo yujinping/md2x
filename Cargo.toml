@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/md2pdf-core",
-    "crates/md2pdf-cli",
-    "crates/md2pdf-gui",
+    "crates/md2x-core",
+    "crates/md2x-cli",
+    "crates/md2x-gui",
 ]
 resolver = "2"
 

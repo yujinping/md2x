@@ -1,13 +1,13 @@
 use clap::Parser;
-use md2pdf_core::chrome;
-use md2pdf_core::converter;
-use md2pdf_core::error;
-use md2pdf_core::template;
+use md2x_core::chrome;
+use md2x_core::converter;
+use md2x_core::error;
+use md2x_core::template;
 use std::path::Path;
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "md2pdf", version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "md2x", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Path to the markdown file
     file: String,

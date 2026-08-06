@@ -1,0 +1,13 @@
+[package]
+name = "md2x-core"
+version = "0.3.7"
+edition = "2021"
+description = "Core library for md2x - Markdown to PDF conversion engine"
+
+[dependencies]
+comrak = "0.28"
+ureq = "2"
+
+[lib]
+name = "md2x_core"
+path = "src/lib.rs"
