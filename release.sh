@@ -48,7 +48,7 @@ detect_repo() {
         owner="${BASH_REMATCH[1]}"
         repo="${BASH_REMATCH[2]%.git}"
     else
-        echo "错误: 无法解析 origin URL: $url（仅支持 GitHub HTTPS/SSH）"
+        echo "错误: 无法解析 origin URL: ${url}（仅支持 GitHub HTTPS/SSH）"
         exit 1
     fi
     REPO_URL="https://github.com/${owner}/${repo}"
@@ -107,7 +107,7 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     exit 1
 fi
 if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
-    echo "错误: 远程已存在 tag $TAG（可先 git push origin :$TAG 删除）"
+    echo "错误: 远程已存在 tag ${TAG}（可先 git push origin :${TAG} 删除）"
     exit 1
 fi
 
@@ -118,7 +118,7 @@ fi
 
 echo "================================================"
 echo "将发布 $PROJECT_NAME $TAG"
-echo "  1. bump ${#VERSION_FILES[@]} 个版本文件 ->  $VER（cargo 自动同步 Cargo.lock）"
+echo "  1. bump ${#VERSION_FILES[@]} 个版本文件 ->  ${VER}（cargo 自动同步 Cargo.lock）"
 echo "  2. git-cliff 生成 CHANGELOG.md，并自动生成 RELEASE_NOTES.md"
 echo "  3. 提交 'chore: release $TAG' 并打 tag"
 echo "  4. push $DEFAULT_BRANCH 与 tag（tag 触发 CI 构建与 GitHub Release）"
