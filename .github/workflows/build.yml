@@ -14,17 +14,17 @@ jobs:
         include:
           - platform: linux
             os: ubuntu-latest
-            cli_artifact: target/release/md2x-cli
+            cli_artifact: target/release/md2x
             gui_bundles: deb
             tauri_target: ""
           - platform: macos-universal
             os: macos-latest
-            cli_artifact: target/release/md2x-cli
+            cli_artifact: target/release/md2x
             gui_bundles: dmg
             tauri_target: --target universal-apple-darwin
           - platform: windows
             os: windows-latest
-            cli_artifact: target/release/md2x-cli.exe
+            cli_artifact: target/release/md2x.exe
             gui_bundles: nsis
             tauri_target: ""
     runs-on: ${{ matrix.os }}
@@ -62,9 +62,9 @@ jobs:
         run: |
           cargo build --release -p md2x-cli --target aarch64-apple-darwin
           cargo build --release -p md2x-cli --target x86_64-apple-darwin
-          lipo -create -output target/release/md2x-cli \
-            target/aarch64-apple-darwin/release/md2x-cli \
-            target/x86_64-apple-darwin/release/md2x-cli
+          lipo -create -output target/release/md2x \
+            target/aarch64-apple-darwin/release/md2x \
+            target/x86_64-apple-darwin/release/md2x
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
