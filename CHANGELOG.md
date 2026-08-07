@@ -1,5 +1,10 @@
 ## [unreleased]
 
+### ⚙️ Miscellaneous Tasks
+
+- *(ci)* 更新CLI产物名称从md2x-cli为md2x
+## [0.1.6] - 2026-08-06
+
 ### 🚜 Refactor
 
 - *(ci)* 将macOS通用构建拆分为独立步骤
@@ -7,6 +12,10 @@
 ### 📚 Documentation
 
 - *(README)* 添加系统要求说明与macOS最低版本配置
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.1.6
 ## [0.1.5] - 2026-08-06
 
 ### 🚀 Features
