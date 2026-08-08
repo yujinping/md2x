@@ -2,14 +2,34 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
   hasFile: Boolean,
   isPdfView: Boolean,
   fileName: String,
 })
-const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html'])
+const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc'])
 const settings = useSettingsStore()
+const exportOpen = ref(false)
+
+function toggleExport() {
+  exportOpen.value = !exportOpen.value
+}
+
+function onExportClick(format) {
+  exportOpen.value = false
+  emit('export-doc', format)
+}
+
+function onClickOutside(e) {
+  if (exportOpen.value && !e.target.closest('.export-menu')) {
+    exportOpen.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('click', onClickOutside))
+onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 
 async function onOpenFile() {
   try {
@@ -75,6 +95,27 @@ async function onOpenFile() {
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M3 8h10"/><path d="M9 4l4 4-4 4"/></svg>
           {{ t('btnPreviewPdf', settings.lang) }}
         </button>
+        <div class="relative export-menu">
+          <button class="btn" :disabled="!hasFile" @click.stop="toggleExport">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M12 11v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-1"/><path d="M8 3v7"/><path d="M5 7l3 3 3-3"/></svg>
+            {{ t('btnExport', settings.lang) }}
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <div v-if="exportOpen" class="absolute right-0 top-[36px] z-50 min-w-[140px] rounded-lg border shadow-lg py-1" :style="{ background: 'var(--surface)', borderColor: 'var(--border)' }">
+            <button class="dropdown-item" @click="onExportClick('html')">
+              <span class="w-2 h-2 rounded-sm" style="background:#e34c26"></span>
+              {{ t('exportHtml', settings.lang) }}
+            </button>
+            <button class="dropdown-item" @click="onExportClick('pdf')">
+              <span class="w-2 h-2 rounded-sm" style="background:#e74c3c"></span>
+              {{ t('exportPdf', settings.lang) }}
+            </button>
+            <button class="dropdown-item" @click="onExportClick('docx')">
+              <span class="w-2 h-2 rounded-sm" style="background:#2b579a"></span>
+              {{ t('exportDocx', settings.lang) }}
+            </button>
+          </div>
+        </div>
       </template>
     </div>
   </header>
@@ -106,4 +147,19 @@ async function onOpenFile() {
 .btn-amber:hover { background: var(--amber-hover); border-color: var(--amber-hover); }
 .btn-ghost { border-color: transparent; color: var(--text-muted); }
 .btn-ghost:hover { color: var(--text); }
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.dropdown-item:hover { background: var(--surface-hover); }
 </style>

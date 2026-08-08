@@ -122,6 +122,27 @@ async function onSavePdf() {
   }
 }
 
+async function onExportDoc(format) {
+  const ext = format
+  const nameMap = { html: 'HTML 文档', pdf: 'PDF 文档', docx: 'Word 文档' }
+  const base = (fileName.value || 'document').replace(/\.md$/i, '')
+  try {
+    const d = await invoke('plugin:dialog|save', {
+      options: {
+        filters: [{ name: nameMap[format], extensions: [ext] }],
+        defaultPath: base + '.' + ext,
+        title: 'Export ' + ext.toUpperCase()
+      }
+    })
+    if (!d) return
+    setStatus('statusExporting', 'busy')
+    await invoke('export_' + format, { dst: d })
+    setStatus('statusExportReady', 'ready')
+  } catch (err) {
+    setStatus(err.toString(), 'error')
+  }
+}
+
 function showHtmlPreview() {
   isPdfView.value = false
   // 从 PDF 视图返回时重新加载 HTML 预览
@@ -210,6 +231,7 @@ async function onOpenFile() {
       @export-pdf="onExportPdf"
       @save-pdf="onSavePdf"
       @show-html="showHtmlPreview"
+      @export-doc="onExportDoc"
     />
 
     <main
