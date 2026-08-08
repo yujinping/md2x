@@ -1,6 +1,6 @@
 # md2x
 
-md2x 是一个将 Markdown 文件转换为精美文档的工具，支持 PDF、HTML、PNG 等输出格式，同时提供命令行（CLI）和桌面应用（GUI）两种使用方式。输出格式采用可扩展架构，新增格式只需扩展格式枚举与转换分支。
+md2x 是一个将 Markdown 文件转换为精美文档的工具，支持 PDF、HTML、PNG、DOCX 等输出格式，同时提供命令行（CLI）和桌面应用（GUI）两种使用方式。输出格式采用可扩展架构，新增格式只需扩展格式枚举与转换分支。
 
 ## 项目结构
 
@@ -32,6 +32,7 @@ md2x-project/
 cargo run -p md2x-cli -- README.md                # 默认生成 README.pdf
 cargo run -p md2x-cli -- README.md --format html  # 生成 README.html
 cargo run -p md2x-cli -- README.md --format png   # 生成 README.png（1920x1080 截图）
+cargo run -p md2x-cli -- README.md --format docx  # 生成 README.docx（可编辑 Word 文档，不依赖 Office）
 cargo run -p md2x-cli -- README.md --preview      # 生成 PDF 并用默认应用打开
 ```
 
@@ -61,7 +62,11 @@ cd .. && cargo run -p md2x-gui
 Markdown → comrak → HTML → 模板渲染
   ├─ PDF：Chrome headless（--print-to-pdf）
   ├─ HTML：直接写出渲染结果
-  └─ PNG：Chrome headless 截图（--screenshot）
+  ├─ PNG：Chrome headless 截图（--screenshot）
+  └─ DOCX：comrak AST → OOXML（zip+XML），纯 Rust 生成，无需 Office/WPS
+
+> DOCX 输出的标题使用 Word 标题样式，打开后左侧导航窗格即可看到目录；正文排版
+> （字体、字号、行距、表格、代码高亮、图片等）与 HTML 预览保持一致。
 ```
 
 ## 许可证
