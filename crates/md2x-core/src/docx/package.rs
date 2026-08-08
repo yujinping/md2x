@@ -15,9 +15,6 @@ const NS_CT: &str = "http://schemas.openxmlformats.org/package/2006/content-type
 const NS_WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
-const NS_V: &str = "urn:schemas-microsoft-com:vml";
-const NS_O: &str = "urn:schemas-microsoft-com:office:office";
-const NS_W10: &str = "urn:schemas-microsoft-com:office:word";
 
 /// 按生成平台选择字体，使 docx 在本机打开时与 HTML/PDF 观感一致。
 /// 返回 (西文字体, 中文字体)。
@@ -60,8 +57,7 @@ pub fn rfonts_xml(mono: bool) -> String {
 pub fn document_wrapper(body: &str) -> String {
     format!(
         "{XML_DECL}<w:document xmlns:w=\"{NS_W}\" xmlns:r=\"{NS_R}\" \
-         xmlns:wp=\"{NS_WP}\" xmlns:a=\"{NS_A}\" xmlns:pic=\"{NS_PIC}\" \
-         xmlns:v=\"{NS_V}\" xmlns:o=\"{NS_O}\" xmlns:w10=\"{NS_W10}\">\
+         xmlns:wp=\"{NS_WP}\" xmlns:a=\"{NS_A}\" xmlns:pic=\"{NS_PIC}\">\
          <w:body>{body}<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/>\
          <w:pgMar w:top=\"1134\" w:right=\"1134\" w:bottom=\"1134\" w:left=\"1134\" \
          w:header=\"708\" w:footer=\"708\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
