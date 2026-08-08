@@ -125,4 +125,18 @@ mod tests {
         assert!(styles.contains("outlineLvl"), "styles.xml 应含 outlineLvl");
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn lists_render_bullets_numbers_and_tasks() {
+        let content = super::markdown_to_docx_content(
+            "- 甲\n- 乙\n\n1. 一\n2. 二\n\n- [x] 完成\n- [ ] 未完成",
+            Path::new("t.md"),
+        )
+        .unwrap();
+        assert!(content.document_xml.contains("w:numId"), "应有编号");
+        assert!(content.document_xml.contains("w:numId w:val=\"1\""), "无序列表");
+        assert!(content.document_xml.contains("w:numId w:val=\"2\""), "有序列表");
+        assert!(content.document_xml.contains("☑"), "已完成任务");
+        assert!(content.document_xml.contains("☐"), "未完成任务");
+    }
 }

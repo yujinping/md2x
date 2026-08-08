@@ -1,7 +1,7 @@
 //! comrak AST → OOXML 片段渲染。
 
 use crate::error::MpeError;
-use comrak::nodes::{AstNode, NodeValue};
+use comrak::nodes::{AstNode, ListType, NodeValue};
 use std::path::Path;
 
 /// 渲染上下文：统一分配 document.xml.rels 的 rId（rId1=styles、rId2=numbering，之后按文档顺序）。
@@ -77,8 +77,70 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
                 ));
             }
         }
+        NodeValue::List(_) => {
+            render_list(node, 0, out, ctx);
+        }
         _ => {}
     }
+}
+
+/// 渲染一个列表（含其下所有条目与嵌套列表）。
+fn render_list<'a>(node: &'a AstNode<'a>, depth: u32, out: &mut String, ctx: &mut RenderCtx) {
+    let num_id = match &node.data.borrow().value {
+        NodeValue::List(l) if l.list_type == ListType::Ordered => 2,
+        _ => 1,
+    };
+    for item in node.children() {
+        render_list_item(item, num_id, depth, out, ctx);
+    }
+}
+
+fn render_list_item<'a>(
+    node: &'a AstNode<'a>,
+    num_id: u32,
+    depth: u32,
+    out: &mut String,
+    ctx: &mut RenderCtx,
+) {
+    let value = &node.data.borrow().value;
+    let (checked, is_task) = match value {
+        NodeValue::TaskItem(checked) => (*checked, true),
+        _ => (None, false),
+    };
+
+    let mut content = String::new();
+    let mut nested = String::new();
+    for child in node.children() {
+        match &child.data.borrow().value {
+            NodeValue::Paragraph => {
+                for gc in child.children() {
+                    content.push_str(&render_inline(gc, InlineStyle::default(), ctx));
+                }
+            }
+            NodeValue::List(_) => {
+                render_list(child, depth + 1, &mut nested, ctx);
+            }
+            _ => {
+                content.push_str(&render_inline(child, InlineStyle::default(), ctx));
+            }
+        }
+    }
+
+    if is_task {
+        let mark = if checked.is_some() { "☑ " } else { "☐ " };
+        content.insert_str(0, &run_xml(mark, &InlineStyle::default()));
+        out.push_str(&format!(
+            "<w:p><w:pPr><w:ind w:left=\"480\"/>\
+             <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>{content}</w:p>"
+        ));
+    } else {
+        out.push_str(&format!(
+            "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{depth}\"/><w:numId w:val=\"{num_id}\"/>\
+             </w:numPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>\
+             {content}</w:p>"
+        ));
+    }
+    out.push_str(&nested);
 }
 
 /// 标题段距（对应 HTML 模板 h1-h6 的 margin）。
