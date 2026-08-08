@@ -29,7 +29,7 @@ jobs:
             tauri_target: ""
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -67,20 +67,20 @@ jobs:
             target/x86_64-apple-darwin/release/md2x
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: md2x-cli-${{ matrix.platform }}
           path: ${{ matrix.cli_artifact }}
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11
 
       - name: Build frontend
         run: |
@@ -102,7 +102,7 @@ jobs:
           cp target/universal-apple-darwin/release/bundle/dmg/*.dmg target/release/bundle/dmg/
 
       - name: Upload GUI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: md2x-gui-${{ matrix.platform }}
           # 只上传安装包产物，避免把 bundle 目录下的中间产物（AppDir 等）一并上传
@@ -120,7 +120,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # RELEASE_NOTES.md 缺失时给出占位说明，避免 body_path 指向不存在的文件
       - name: 准备发布说明
@@ -130,7 +130,7 @@ jobs:
           fi
 
       - name: 下载各平台构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
