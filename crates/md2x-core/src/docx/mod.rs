@@ -312,20 +312,17 @@ mod tests {
         let content =
             super::markdown_to_docx_content("```rust\nfn main() {}\n```", Path::new("t.md"))
                 .unwrap();
-        let xml = &content.document_xml;
-        assert!(xml.contains("<w:tbl>"), "代码块应使用无边框表格承载");
-        assert!(xml.contains("282C34"), "深色底纹");
         assert!(
-            xml.contains("<w:left w:w=\"240\" w:type=\"dxa\"/>"),
-            "单元格左侧内部边距"
+            !content.document_xml.contains("v:roundrect"),
+            "代码块不应使用圆角文本框"
         );
         assert!(
-            !xml.contains("<w:ind w:left=\"240\""),
-            "不应有外部缩进（黑色底与页面左对齐）"
+            content.document_xml.contains("282C34"),
+            "代码块保留段落底纹"
         );
         assert!(
-            !xml.contains("v:roundrect"),
-            "不应使用圆角文本框"
+            content.document_xml.contains("<w:ind w:left=\"240\""),
+            "代码文字应保留左侧内边距"
         );
     }
 }
