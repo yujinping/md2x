@@ -4,7 +4,7 @@ use crate::error::MpeError;
 use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
 use std::path::{Path, PathBuf};
 
-use super::{highlight, image};
+use super::{highlight, image, package::rfonts_xml};
 
 /// 渲染上下文：统一分配 document.xml.rels 的 rId（rId1=styles、rId2=numbering，之后按文档顺序）。
 #[derive(Default)]
@@ -388,10 +388,10 @@ fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
         for (text, color) in line {
             runs.push_str(&format!(
                 "<w:r><w:rPr>\
-                 <w:rFonts w:ascii=\"Consolas\" w:eastAsia=\"Microsoft YaHei\" \
-                 w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>\
+                 {}\
                  <w:color w:val=\"{color}\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>\
                  </w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                rfonts_xml(true),
                 escape_xml(text)
             ));
         }
@@ -597,20 +597,14 @@ fn collect_text_into<'a>(node: &'a AstNode<'a>, out: &mut String) {
 fn run_properties(style: &InlineStyle) -> String {
     let mut rpr = String::new();
     if style.code {
-        rpr.push_str(
-            "<w:rFonts w:ascii=\"Consolas\" w:eastAsia=\"Microsoft YaHei\" \
-             w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>",
-        );
+        rpr.push_str(&rfonts_xml(true));
         let sz = style.size.unwrap_or(20);
         rpr.push_str(&format!(
             "<w:color w:val=\"d63384\"/><w:sz w:val=\"{sz}\"/><w:szCs w:val=\"{sz}\"/>"
         ));
         rpr.push_str("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"f0f0f0\"/>");
     } else {
-        rpr.push_str(
-            "<w:rFonts w:ascii=\"Segoe UI\" w:eastAsia=\"Microsoft YaHei\" \
-             w:hAnsi=\"Segoe UI\" w:cs=\"Segoe UI\"/>",
-        );
+        rpr.push_str(&rfonts_xml(false));
         let sz = style.size.unwrap_or(22);
         rpr.push_str(&format!("<w:sz w:val=\"{sz}\"/><w:szCs w:val=\"{sz}\"/>"));
         if style.link {

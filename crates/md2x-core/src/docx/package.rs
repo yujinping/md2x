@@ -16,6 +16,43 @@ const NS_WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordproces
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_PIC: &str = "http://schemas.openxmlformats.org/drawingml/2006/picture";
 
+/// 按生成平台选择字体，使 docx 在本机打开时与 HTML/PDF 观感一致。
+/// 返回 (西文字体, 中文字体)。
+pub fn platform_fonts() -> (&'static str, &'static str) {
+    #[cfg(target_os = "macos")]
+    {
+        ("Helvetica Neue", "PingFang SC")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        ("Segoe UI", "Microsoft YaHei")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        ("Ubuntu", "Noto Sans CJK SC")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        ("Arial", "Microsoft YaHei")
+    }
+}
+
+/// 组装 w:rFonts 属性片段。
+pub fn rfonts_xml(mono: bool) -> String {
+    let (ascii, east_asia) = platform_fonts();
+    if mono {
+        format!(
+            "<w:rFonts w:ascii=\"Consolas\" w:eastAsia=\"{east_asia}\" \
+             w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>"
+        )
+    } else {
+        format!(
+            "<w:rFonts w:ascii=\"{ascii}\" w:eastAsia=\"{east_asia}\" \
+             w:hAnsi=\"{ascii}\" w:cs=\"{ascii}\"/>"
+        )
+    }
+}
+
 /// 将 body 包成完整的 word/document.xml。
 pub fn document_wrapper(body: &str) -> String {
     format!(
@@ -197,14 +234,15 @@ fn styles_xml() -> String {
         "{XML_DECL}<w:styles xmlns:w=\"{NS_W}\">\
          <w:docDefaults>\
          <w:rPrDefault><w:rPr>\
-         <w:rFonts w:ascii=\"Segoe UI\" w:eastAsia=\"Microsoft YaHei\" w:hAnsi=\"Segoe UI\" w:cs=\"Segoe UI\"/>\
+         {}\
          <w:color w:val=\"333333\"/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr></w:rPrDefault>\
          <w:pPrDefault><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/></w:pPr></w:pPrDefault>\
          </w:docDefaults>\
          <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">\
          <w:name w:val=\"Normal\"/><w:qFormat/></w:style>\
          {headings}\
-         </w:styles>"
+         </w:styles>",
+        rfonts_xml(false),
     )
 }
 
