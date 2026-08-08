@@ -233,6 +233,9 @@ async fn wait_for_drop(state: State<'_, DropChannel>) -> Result<String, String> 
 #[tauri::command]
 fn read_file_chunk(path: String, offset: usize) -> Result<(String, bool), String> {
     let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+    if offset >= data.len() {
+        return Ok((String::new(), true));
+    }
     let end = std::cmp::min(offset + 524288, data.len());
     Ok((
         String::from_utf8_lossy(&data[offset..end]).to_string(),

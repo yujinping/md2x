@@ -129,7 +129,7 @@ fn jpeg_dimensions(b: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn gif_dimensions(b: &[u8]) -> Option<(u32, u32)> {
-    if b.len() < 10 || (&b[0..3] != b"GIF" && &b[0..3] != b"GIF") {
+    if b.len() < 10 || &b[0..3] != b"GIF" {
         return None;
     }
     Some((u16_le(&b[6..8])? as u32, u16_le(&b[8..10])? as u32))
