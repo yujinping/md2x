@@ -138,6 +138,9 @@ pub fn run() {
             read_file_chunk,
             preview_pdf,
             save_pdf_as,
+            export_html,
+            export_pdf,
+            export_docx,
             get_file_name,
             wait_for_drop,
             check_file_changed,
@@ -517,6 +520,76 @@ fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
 #[tauri::command]
 fn save_pdf_as(src: String, dst: String) -> Result<(), String> {
     std::fs::copy(&src, &dst).map_err(|e| format!("保存失败: {}", e))?;
+    Ok(())
+}
+
+/// 渲染完整 HTML（含模板、图片内嵌、SKILL 元数据），供导出命令复用。
+fn render_full_html(p: &Path) -> Result<String, String> {
+    let md = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
+    let is_skill = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|n| n == "SKILL.md")
+        .unwrap_or(false);
+    let (metadata, body_md) = if is_skill {
+        converter::parse_front_matter(&md)
+    } else {
+        (None, &md[..])
+    };
+    let hb = converter::convert_markdown_to_html(body_md).map_err(|e| e.to_string())?;
+    let hb = converter::resolve_image_srcs(&hb, p);
+    let t = p
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Untitled");
+    Ok(template::render_html_template_with_metadata(&hb, t, metadata.as_ref()))
+}
+
+/// 导出 HTML 到用户指定位置
+#[tauri::command]
+fn export_html(dst: String, s: State<AppState>) -> Result<(), String> {
+    let cur = s.current_file.lock().map_err(|e| e.to_string())?;
+    let p = cur
+        .as_ref()
+        .ok_or_else(|| "没有打开文件".to_string())?
+        .clone();
+    drop(cur);
+    let html = render_full_html(&p)?;
+    std::fs::write(&dst, html).map_err(|e| format!("导出失败: {e}"))?;
+    Ok(())
+}
+
+/// 导出 PDF 到用户指定位置
+#[tauri::command]
+fn export_pdf(dst: String, s: State<AppState>) -> Result<(), String> {
+    let cur = s.current_file.lock().map_err(|e| e.to_string())?;
+    let p = cur
+        .as_ref()
+        .ok_or_else(|| "没有打开文件".to_string())?
+        .clone();
+    drop(cur);
+    let html = render_full_html(&p)?;
+    let d = std::env::temp_dir().join("rust-mpe-browser");
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    let hp = d.join("export-tmp.html");
+    std::fs::write(&hp, html).map_err(|e| e.to_string())?;
+    chrome::generate_pdf(&hp.to_string_lossy(), &dst).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&hp);
+    Ok(())
+}
+
+/// 导出 DOCX 到用户指定位置（纯 Rust 生成，不依赖 Office）
+#[tauri::command]
+fn export_docx(dst: String, s: State<AppState>) -> Result<(), String> {
+    let cur = s.current_file.lock().map_err(|e| e.to_string())?;
+    let p = cur
+        .as_ref()
+        .ok_or_else(|| "没有打开文件".to_string())?
+        .clone();
+    drop(cur);
+    let md = std::fs::read_to_string(&p).map_err(|e| format!("读取失败: {e}"))?;
+    md2x_core::docx::convert_markdown_to_docx(&md, &p, Path::new(&dst))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
