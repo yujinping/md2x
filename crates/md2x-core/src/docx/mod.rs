@@ -306,4 +306,43 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn short_code_block_uses_rounded_textbox() {
+        let content =
+            super::markdown_to_docx_content("```rust\nfn main() {}\n```", Path::new("t.md"))
+                .unwrap();
+        assert!(
+            content.document_xml.contains("v:roundrect"),
+            "短代码块应使用圆角文本框"
+        );
+        assert!(content.document_xml.contains("arcsize"), "圆角参数");
+        assert!(
+            content.document_xml.contains("282C34"),
+            "深色背景填充"
+        );
+        assert!(content.document_xml.contains("inset"), "内边距");
+        assert!(
+            content.document_xml.contains("txbxContent"),
+            "文本框内容"
+        );
+    }
+
+    #[test]
+    fn long_code_block_falls_back_to_paragraph_shading() {
+        let mut code = String::new();
+        for i in 0..60 {
+            code.push_str(&format!("let x = {i};\n"));
+        }
+        let md = format!("```rust\n{code}```");
+        let content = super::markdown_to_docx_content(&md, Path::new("t.md")).unwrap();
+        assert!(
+            !content.document_xml.contains("v:roundrect"),
+            "长代码块不应使用文本框（避免跨页截断）"
+        );
+        assert!(
+            content.document_xml.contains("282C34"),
+            "长代码块保留段落底纹"
+        );
+    }
 }

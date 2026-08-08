@@ -354,7 +354,8 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
     }
 }
 
-/// 代码块：每行一个段落，深色底纹 + 等宽字体 + token 高亮。
+/// 代码块：短块用圆角文本框（圆角 + 内边距，观感对齐 HTML）；长块回退为
+/// 段落底纹（避免文本框跨页截断内容）。
 fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
     let tokens = highlight::highlight_code(lang, code);
     // 将 token 按换行拆分为行
@@ -373,6 +374,45 @@ fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
         }
     }
 
+    if lines.len() <= 40 {
+        render_rounded_code_block(&lines, out);
+    } else {
+        render_shaded_code_block(&lines, out);
+    }
+}
+
+/// 圆角文本框代码块：VML roundrect + textbox，深色填充 + 内边距。
+fn render_rounded_code_block(lines: &[Vec<(String, String)>], out: &mut String) {
+    let mut content = String::new();
+    for line in lines {
+        let mut runs = String::new();
+        for (text, color) in line {
+            runs.push_str(&format!(
+                "<w:r><w:rPr>{}\
+                 <w:color w:val=\"{color}\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>\
+                 </w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                rfonts_xml(true),
+                escape_xml(text)
+            ));
+        }
+        content.push_str(&format!(
+            "<w:p><w:pPr><w:spacing w:after=\"0\" w:line=\"320\" w:lineRule=\"auto\"/>\
+             </w:pPr>{runs}</w:p>"
+        ));
+    }
+    out.push_str(&format!(
+        "<w:p><w:pPr><w:spacing w:before=\"240\" w:after=\"240\"/></w:pPr>\
+         <w:r><w:pict>\
+         <v:roundrect style=\"width:481.9pt;mso-fit-shape-to-text:true\" \
+         fillcolor=\"#282C34\" strokecolor=\"#282C34\" arcsize=\"0.05\">\
+         <v:textbox inset=\"15pt,12pt,15pt,12pt\">\
+         <w:txbxContent>{content}</w:txbxContent>\
+         </v:textbox></v:roundrect></w:pict></w:r></w:p>"
+    ));
+}
+
+/// 段落底纹代码块（长代码块兜底，保证跨页内容完整）。
+fn render_shaded_code_block(lines: &[Vec<(String, String)>], out: &mut String) {
     let n = lines.len();
     for (i, line) in lines.iter().enumerate() {
         let (before, after) = if n == 1 {
