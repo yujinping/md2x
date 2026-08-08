@@ -8,6 +8,7 @@ pub mod highlight;
 pub mod image;
 
 use crate::error::MpeError;
+use crate::converter;
 use std::path::Path;
 
 /// 生成的 docx 内容：document.xml 正文 + 内嵌媒体（文件名、字节、content type）。
@@ -21,7 +22,8 @@ pub struct DocxContent {
 
 /// 将 Markdown 转换为 docx 内容（不落盘）。
 pub fn markdown_to_docx_content(md: &str, md_file: &Path) -> Result<DocxContent, MpeError> {
-    let (body, ctx) = render::render_body(md, md_file)?;
+    let (_metadata, body_md) = converter::parse_front_matter(md);
+    let (body, ctx) = render::render_body(body_md, md_file)?;
     Ok(DocxContent {
         document_xml: package::document_wrapper(&body),
         media: ctx.media,
@@ -209,5 +211,19 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&out_dir).ok();
+    }
+
+    #[test]
+    fn frontmatter_stripped_and_mixed_doc_renders() {
+        let content = super::markdown_to_docx_content(
+            "---\ntitle: 演示\n---\n\n# 标题\n\n- 项一\n- 项二\n\n```rust\nlet x = 1;\n```",
+            Path::new("t.md"),
+        )
+        .unwrap();
+        assert!(
+            !content.document_xml.contains("title: 演示"),
+            "frontmatter 不应进入正文"
+        );
+        assert!(content.document_xml.contains("项一"), "列表内容");
     }
 }
