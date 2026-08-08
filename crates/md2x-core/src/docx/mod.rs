@@ -11,15 +11,19 @@ use std::path::Path;
 /// 生成的 docx 内容：document.xml 正文 + 内嵌媒体（文件名、字节、content type）。
 pub struct DocxContent {
     pub document_xml: String,
-    pub media: Vec<(String, Vec<u8>, String)>,
+    /// (文件名, 字节, content type, rId)
+    pub media: Vec<(String, Vec<u8>, String, usize)>,
+    /// (rId, 目标 URL)
+    pub links: Vec<(usize, String)>,
 }
 
 /// 将 Markdown 转换为 docx 内容（不落盘）。
 pub fn markdown_to_docx_content(md: &str, md_file: &Path) -> Result<DocxContent, MpeError> {
-    let body = render::render_body(md, md_file)?;
+    let (body, ctx) = render::render_body(md, md_file)?;
     Ok(DocxContent {
         document_xml: package::document_wrapper(&body),
-        media: Vec::new(),
+        media: ctx.media,
+        links: ctx.links,
     })
 }
 
@@ -65,5 +69,26 @@ mod tests {
         std::io::Read::read_to_string(&mut doc, &mut xml).unwrap();
         assert!(xml.contains("Heading1"), "标题应使用 Heading1 样式");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn paragraph_renders_runs_and_inline_styles() {
+        let content = super::markdown_to_docx_content(
+            "普通 **粗体** *斜体* ~~删除~~ `code` [链接](https://example.com)\n第二行",
+            Path::new("test.md"),
+        )
+        .unwrap();
+        assert!(content.document_xml.contains("<w:b/>"), "应有加粗");
+        assert!(content.document_xml.contains("<w:i/>"), "应有斜体");
+        assert!(content.document_xml.contains("<w:strike/>"), "应有删除线");
+        assert!(content.document_xml.contains("d63384"), "行内代码颜色");
+        assert!(content.document_xml.contains("w:hyperlink"), "应有超链接");
+        assert!(content.document_xml.contains("0366d6"), "链接颜色");
+        assert!(content.document_xml.contains("eastAsia"), "中文字体");
+        assert!(
+            content.document_xml.contains("w:line=\"350\""),
+            "行距 1.75"
+        );
+        assert!(content.document_xml.contains("<w:br/>"), "换行");
     }
 }

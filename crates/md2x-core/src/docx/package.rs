@@ -45,10 +45,10 @@ pub fn write_package(content: &DocxContent, dst: &Path) -> Result<(), MpeError> 
         &mut zip,
         &opts,
         "word/_rels/document.xml.rels",
-        &document_rels_xml(&content.media),
+        &document_rels_xml(&content.media, &content.links),
     )?;
 
-    for (name, bytes, _ct) in &content.media {
+    for (name, bytes, _ct, _rid) in &content.media {
         write_zip(&mut zip, &opts, &format!("word/media/{name}"), bytes)?;
     }
 
@@ -70,10 +70,10 @@ fn zip_err(e: zip::result::ZipError) -> MpeError {
     MpeError::IoError(std::io::Error::other(e.to_string()))
 }
 
-fn content_types_xml(media: &[(String, Vec<u8>, String)]) -> String {
+fn content_types_xml(media: &[(String, Vec<u8>, String, usize)]) -> String {
     let mut defaults = String::new();
     let mut seen = std::collections::BTreeSet::new();
-    for (name, _bytes, ct) in media {
+    for (name, _bytes, ct, _rid) in media {
         let ext = name.rsplit('.').next().unwrap_or("bin").to_ascii_lowercase();
         if seen.insert(ext.clone()) {
             defaults.push_str(&format!(
@@ -105,21 +105,52 @@ fn root_rels_xml() -> String {
     )
 }
 
-fn document_rels_xml(media: &[(String, Vec<u8>, String)]) -> String {
+fn document_rels_xml(
+    media: &[(String, Vec<u8>, String, usize)],
+    links: &[(usize, String)],
+) -> String {
     let mut rels = String::new();
     rels.push_str(&format!(
         "{XML_DECL}<Relationships xmlns=\"{NS_PKG_REL}\">\
          <Relationship Id=\"rId1\" Type=\"{NS_R}/styles\" Target=\"styles.xml\"/>\
          <Relationship Id=\"rId2\" Type=\"{NS_R}/numbering\" Target=\"numbering.xml\"/>"
     ));
-    for (i, (name, _bytes, _ct)) in media.iter().enumerate() {
-        let rid = i + 3;
-        rels.push_str(&format!(
-            "<Relationship Id=\"rId{rid}\" Type=\"{NS_R}/image\" Target=\"media/{name}\"/>"
-        ));
+    // 按 rId 升序合并媒体与链接
+    let mut items: Vec<(usize, &str, String)> = Vec::new();
+    for (name, _bytes, _ct, rid) in media {
+        items.push((*rid, "image", format!("media/{name}")));
+    }
+    for (rid, url) in links {
+        items.push((*rid, "hyperlink", url.clone()));
+    }
+    items.sort_by_key(|(rid, _, _)| *rid);
+    for (rid, kind, target) in items {
+        let target = escape_xml(&target);
+        match kind {
+            "hyperlink" => rels.push_str(&format!(
+                "<Relationship Id=\"rId{rid}\" Type=\"{NS_R}/hyperlink\" Target=\"{target}\" TargetMode=\"External\"/>"
+            )),
+            _ => rels.push_str(&format!(
+                "<Relationship Id=\"rId{rid}\" Type=\"{NS_R}/image\" Target=\"{target}\"/>"
+            )),
+        }
     }
     rels.push_str("</Relationships>");
     rels
+}
+
+fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn core_xml() -> String {
