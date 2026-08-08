@@ -198,7 +198,7 @@ fn styles_xml() -> String {
          <w:docDefaults>\
          <w:rPrDefault><w:rPr>\
          <w:rFonts w:ascii=\"Segoe UI\" w:eastAsia=\"Microsoft YaHei\" w:hAnsi=\"Segoe UI\" w:cs=\"Segoe UI\"/>\
-         <w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr></w:rPrDefault>\
+         <w:color w:val=\"333333\"/><w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/></w:rPr></w:rPrDefault>\
          <w:pPrDefault><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/></w:pPr></w:pPrDefault>\
          </w:docDefaults>\
          <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">\

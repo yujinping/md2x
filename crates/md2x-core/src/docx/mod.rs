@@ -151,4 +151,14 @@ mod tests {
         assert!(content.document_xml.contains("C678DD"), "关键字高亮色");
         assert!(content.document_xml.contains("Consolas"), "等宽字体");
     }
+
+    #[test]
+    fn blockquote_and_hr_render() {
+        let content = super::markdown_to_docx_content("> 引用内容\n\n---", Path::new("t.md"))
+            .unwrap();
+        assert!(content.document_xml.contains("6a737d"), "引用灰字");
+        assert!(content.document_xml.contains("w:left"), "左边框");
+        assert!(content.document_xml.contains("fafbfc"), "引用背景");
+        assert!(content.document_xml.contains("eaecef"), "分割线颜色");
+    }
 }

@@ -24,6 +24,7 @@ struct InlineStyle {
     strike: bool,
     code: bool,
     link: bool,
+    quote: bool,
 }
 
 /// 将 Markdown 渲染为 document.xml 的 body 内容，同时收集媒体与链接。
@@ -80,7 +81,7 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
             }
         }
         NodeValue::List(_) => {
-            render_list(node, 0, out, ctx);
+            render_list(node, 0, false, out, ctx);
         }
         NodeValue::CodeBlock(cb) => {
             let lang = if cb.info.trim().is_empty() {
@@ -89,6 +90,76 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
                 Some(cb.info.trim())
             };
             render_code_block(lang, &cb.literal, out);
+        }
+        NodeValue::BlockQuote => {
+            for child in node.children() {
+                render_quote_block(child, out, ctx);
+            }
+        }
+        NodeValue::ThematicBreak => {
+            out.push_str(
+                "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"1\" \
+                 w:color=\"eaecef\"/></w:pBdr>\
+                 <w:spacing w:before=\"360\" w:after=\"360\"/></w:pPr></w:p>",
+            );
+        }
+        _ => {}
+    }
+}
+
+/// 引用块内的块级元素（继承引用样式：缩进、左边框、浅色背景、灰字）。
+fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx) {
+    const QUOTE_PPR: &str = "<w:pBdr><w:left w:val=\"single\" w:sz=\"24\" w:space=\"8\" \
+         w:color=\"dfe2e5\"/></w:pBdr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"fafbfc\"/>\
+         <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/><w:ind w:left=\"240\"/>";
+
+    match &node.data.borrow().value {
+        NodeValue::Paragraph => {
+            let mut content = String::new();
+            for gc in node.children() {
+                content.push_str(&render_inline(
+                    gc,
+                    InlineStyle {
+                        quote: true,
+                        ..InlineStyle::default()
+                    },
+                    ctx,
+                ));
+            }
+            if !content.is_empty() {
+                out.push_str(&format!("<w:p><w:pPr>{QUOTE_PPR}</w:pPr>{content}</w:p>"));
+            }
+        }
+        NodeValue::List(_) => render_list(node, 0, true, out, ctx),
+        NodeValue::CodeBlock(cb) => {
+            let lang = if cb.info.trim().is_empty() {
+                None
+            } else {
+                Some(cb.info.trim())
+            };
+            render_code_block(lang, &cb.literal, out);
+        }
+        NodeValue::BlockQuote => {
+            for child in node.children() {
+                render_quote_block(child, out, ctx);
+            }
+        }
+        NodeValue::Heading(h) => {
+            let lvl = h.level.clamp(1, 6);
+            let mut content = String::new();
+            for gc in node.children() {
+                content.push_str(&render_inline(
+                    gc,
+                    InlineStyle {
+                        quote: true,
+                        ..InlineStyle::default()
+                    },
+                    ctx,
+                ));
+            }
+            out.push_str(&format!(
+                "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/>{QUOTE_PPR}</w:pPr>{content}</w:p>"
+            ));
         }
         _ => {}
     }
@@ -146,13 +217,19 @@ fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
 }
 
 /// 渲染一个列表（含其下所有条目与嵌套列表）。
-fn render_list<'a>(node: &'a AstNode<'a>, depth: u32, out: &mut String, ctx: &mut RenderCtx) {
+fn render_list<'a>(
+    node: &'a AstNode<'a>,
+    depth: u32,
+    quote: bool,
+    out: &mut String,
+    ctx: &mut RenderCtx,
+) {
     let num_id = match &node.data.borrow().value {
         NodeValue::List(l) if l.list_type == ListType::Ordered => 2,
         _ => 1,
     };
     for item in node.children() {
-        render_list_item(item, num_id, depth, out, ctx);
+        render_list_item(item, num_id, depth, quote, out, ctx);
     }
 }
 
@@ -160,6 +237,7 @@ fn render_list_item<'a>(
     node: &'a AstNode<'a>,
     num_id: u32,
     depth: u32,
+    quote: bool,
     out: &mut String,
     ctx: &mut RenderCtx,
 ) {
@@ -179,7 +257,7 @@ fn render_list_item<'a>(
                 }
             }
             NodeValue::List(_) => {
-                render_list(child, depth + 1, &mut nested, ctx);
+                render_list(child, depth + 1, quote, &mut nested, ctx);
             }
             _ => {
                 content.push_str(&render_inline(child, InlineStyle::default(), ctx));
@@ -190,19 +268,26 @@ fn render_list_item<'a>(
     if is_task {
         let mark = if checked.is_some() { "☑ " } else { "☐ " };
         content.insert_str(0, &run_xml(mark, &InlineStyle::default()));
+        let quote_ppr = if quote { QUOTE_LIST_PPR } else { "" };
         out.push_str(&format!(
-            "<w:p><w:pPr><w:ind w:left=\"480\"/>\
+            "<w:p><w:pPr>{quote_ppr}<w:ind w:left=\"480\"/>\
              <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>{content}</w:p>"
         ));
     } else {
+        let quote_ppr = if quote { QUOTE_LIST_PPR } else { "" };
         out.push_str(&format!(
             "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{depth}\"/><w:numId w:val=\"{num_id}\"/>\
-             </w:numPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>\
+             </w:numPr>{quote_ppr}\
+             <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>\
              {content}</w:p>"
         ));
     }
     out.push_str(&nested);
 }
+
+const QUOTE_LIST_PPR: &str =
+    "<w:pBdr><w:left w:val=\"single\" w:sz=\"24\" w:space=\"8\" w:color=\"dfe2e5\"/></w:pBdr>\
+     <w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"fafbfc\"/>";
 
 /// 标题段距（对应 HTML 模板 h1-h6 的 margin）。
 fn heading_spacing(level: u8) -> (u32, u32) {
@@ -299,6 +384,8 @@ fn run_properties(style: &InlineStyle) -> String {
         rpr.push_str("<w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/>");
         if style.link {
             rpr.push_str("<w:color w:val=\"0366d6\"/><w:u w:val=\"single\"/>");
+        } else if style.quote {
+            rpr.push_str("<w:color w:val=\"6a737d\"/>");
         }
     }
     if style.bold {
