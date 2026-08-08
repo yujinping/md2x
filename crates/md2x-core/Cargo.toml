@@ -6,8 +6,12 @@ description = "Core library for md2x - Markdown to PDF conversion engine"
 
 [dependencies]
 comrak = "0.28"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "plist-load"] }
 ureq = "2"
+zip = "8.6.0"
 
 [lib]
 name = "md2x_core"
 path = "src/lib.rs"
+
+[dev-dependencies]

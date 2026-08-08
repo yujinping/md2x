@@ -5,6 +5,7 @@
 pub mod package;
 pub mod render;
 pub mod highlight;
+pub mod image;
 
 use crate::error::MpeError;
 use std::path::Path;
@@ -179,5 +180,34 @@ mod tests {
             "右对齐列"
         );
         assert!(content.document_xml.contains("<w:tblGrid>"), "表格网格");
+    }
+
+    #[test]
+    fn image_embeds_into_media_and_drawing() {
+        let png_bytes: &[u8] = include_bytes!("../../../../crates/md2x-gui/icons/32x32.png");
+        let dir = std::env::temp_dir().join("md2x-docx-img");
+        std::fs::create_dir_all(&dir).unwrap();
+        let png_path = dir.join("pixel.png");
+        std::fs::write(&png_path, png_bytes).unwrap();
+
+        let md = format!("![像素]({})", png_path.display());
+        let content = super::markdown_to_docx_content(&md, &png_path).unwrap();
+        assert_eq!(content.media.len(), 1, "应嵌入 1 张图片");
+        assert!(content.document_xml.contains("<w:drawing>"), "应有 drawing");
+        assert!(content.document_xml.contains("rId3"), "图片关系");
+
+        let out_dir = std::env::temp_dir().join("md2x-docx-img-out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let dst = out_dir.join("img.docx");
+        super::write_docx(&content, &dst).unwrap();
+        let file = std::fs::File::open(&dst).unwrap();
+        let zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
+        assert!(
+            names.iter().any(|n| n.starts_with("word/media/")),
+            "缺少 media: {names:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&out_dir).ok();
     }
 }

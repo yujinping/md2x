@@ -118,22 +118,13 @@ fn try_resolve_src(tag: &str, base: &Path, hugo_root: Option<&Path>) -> String {
 
 /// 下载远程图片并转为 data URI 字符串
 fn download_image_as_data_uri(url: &str) -> Option<String> {
-    let resp = ureq::get(url).set("User-Agent", "md2x/0.1").call().ok()?;
-
-    let mime = resp
-        .header("content-type")
-        .unwrap_or("application/octet-stream")
-        .to_string();
-
-    let mut body: Vec<u8> = Vec::new();
-    resp.into_reader().read_to_end(&mut body).ok()?;
-
+    let (body, mime) = download_image_bytes(url)?;
     let b64 = base64_encode(&body);
     Some(format!("data:{};base64,{}", mime, b64))
 }
 
 /// 判断路径是否需要本地解析（排除 data/file 协议和锚点）
-fn is_resolvable_path(src: &str) -> bool {
+pub(crate) fn is_resolvable_path(src: &str) -> bool {
     !(src.starts_with("http://")
         || src.starts_with("https://")
         || src.starts_with("data:")
@@ -142,7 +133,7 @@ fn is_resolvable_path(src: &str) -> bool {
 }
 
 /// 从 markdown 文件向上遍历，查找 Hugo 项目根目录（含 static/ 子目录的祖先目录）
-fn find_hugo_root(md_file: &Path) -> Option<PathBuf> {
+pub(crate) fn find_hugo_root(md_file: &Path) -> Option<PathBuf> {
     let mut dir = md_file.parent()?;
     loop {
         if dir.join("static").is_dir() {
@@ -152,7 +143,7 @@ fn find_hugo_root(md_file: &Path) -> Option<PathBuf> {
     }
 }
 
-fn mime_from_ext(path: &Path) -> &'static str {
+pub(crate) fn mime_from_ext(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -163,6 +154,18 @@ fn mime_from_ext(path: &Path) -> &'static str {
         "bmp" => "image/bmp",
         _ => "application/octet-stream",
     }
+}
+
+/// 下载远程图片，返回 (字节, content type)。
+pub(crate) fn download_image_bytes(url: &str) -> Option<(Vec<u8>, String)> {
+    let resp = ureq::get(url).set("User-Agent", "md2x/0.1").call().ok()?;
+    let mime = resp
+        .header("content-type")
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let mut body: Vec<u8> = Vec::new();
+    resp.into_reader().read_to_end(&mut body).ok()?;
+    Some((body, mime))
 }
 
 /// 极简 base64 编码（无依赖）

@@ -2,14 +2,17 @@
 
 use crate::error::MpeError;
 use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use super::highlight;
+use super::{highlight, image};
 
 /// 渲染上下文：统一分配 document.xml.rels 的 rId（rId1=styles、rId2=numbering，之后按文档顺序）。
 #[derive(Default)]
 pub struct RenderCtx {
     pub next_rid: usize,
+    pub next_drawing_id: usize,
+    /// 当前 Markdown 文件路径（图片相对路径基准）
+    pub md_file: PathBuf,
     /// (文件名, 字节, content type, rId)
     pub media: Vec<(String, Vec<u8>, String, usize)>,
     /// (rId, 目标 URL)
@@ -30,7 +33,7 @@ struct InlineStyle {
 /// 将 Markdown 渲染为 document.xml 的 body 内容，同时收集媒体与链接。
 pub fn render_body(
     md: &str,
-    _md_file: &Path,
+    md_file: &Path,
 ) -> Result<(String, RenderCtx), MpeError> {
     let mut options = comrak::ComrakOptions::default();
     options.extension.table = true;
@@ -44,6 +47,8 @@ pub fn render_body(
     let root = comrak::parse_document(&arena, md, &options);
     let mut ctx = RenderCtx {
         next_rid: 3,
+        next_drawing_id: 1,
+        md_file: md_file.to_path_buf(),
         ..Default::default()
     };
     let mut out = String::new();
@@ -71,13 +76,17 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
         NodeValue::Paragraph => {
             let mut content = String::new();
             for child in node.children() {
-                content.push_str(&render_inline(child, InlineStyle::default(), ctx));
+                if matches!(&child.data.borrow().value, NodeValue::Image(_)) {
+                    if !content.is_empty() {
+                        flush_paragraph(&mut content, out);
+                    }
+                    out.push_str(&render_image(child, ctx));
+                } else {
+                    content.push_str(&render_inline(child, InlineStyle::default(), ctx));
+                }
             }
             if !content.is_empty() {
-                out.push_str(&format!(
-                    "<w:p><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/>\
-                     </w:pPr>{content}</w:p>"
-                ));
+                flush_paragraph(&mut content, out);
             }
         }
         NodeValue::List(_) => {
@@ -108,6 +117,89 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
         }
         _ => {}
     }
+}
+
+fn flush_paragraph(content: &mut String, out: &mut String) {
+    if content.is_empty() {
+        return;
+    }
+    out.push_str(&format!(
+        "<w:p><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/>\
+         </w:pPr>{content}</w:p>"
+    ));
+    content.clear();
+}
+
+/// 渲染图片为居中段落 + w:drawing。
+fn render_image<'a>(node: &'a AstNode<'a>, ctx: &mut RenderCtx) -> String {
+    let value = &node.data.borrow().value;
+    let url = match value {
+        NodeValue::Image(l) => l.url.clone(),
+        _ => return String::new(),
+    };
+    let alt = collect_text(node);
+
+    let Some((bytes, mime)) = image::resolve_image_bytes(&url, &ctx.md_file) else {
+        // 图片不可用：输出 alt 文本兜底
+        let mut alt_run = String::new();
+        if !alt.is_empty() {
+            alt_run = format!(
+                "<w:r><w:rPr><w:color w:val=\"8b949e\"/></w:rPr>\
+                 <w:t xml:space=\"preserve\">[{}]</w:t></w:r>",
+                escape_xml(&alt)
+            );
+        }
+        return format!(
+            "<w:p><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/>\
+             </w:pPr>{alt_run}</w:p>"
+        );
+    };
+
+    let Some((w, h)) = image::image_dimensions(&bytes, &mime) else {
+        return String::new();
+    };
+    // 像素 → EMU（96dpi：1px = 9525 EMU），超宽等比缩放
+    let max_cx = 5_760_720u64;
+    let mut cx = w as u64 * 9525;
+    let mut cy = h as u64 * 9525;
+    if cx > max_cx {
+        cy = cy * max_cx / cx;
+        cx = max_cx;
+    }
+
+    let rid = ctx.next_rid;
+    ctx.next_rid += 1;
+    let did = ctx.next_drawing_id;
+    ctx.next_drawing_id += 1;
+    let name = format!("image{rid}.{}", image::ext_from_mime(&mime));
+    let ct = if mime.contains("jpeg") {
+        "image/jpeg"
+    } else if mime.contains("gif") {
+        "image/gif"
+    } else if mime.contains("bmp") {
+        "image/bmp"
+    } else if mime.contains("webp") {
+        "image/webp"
+    } else {
+        "image/png"
+    };
+    ctx.media.push((name.clone(), bytes, ct.to_string(), rid));
+
+    format!(
+        "<w:p><w:pPr><w:jc w:val=\"center\"/>\
+         <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/></w:pPr>\
+         <w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
+         <wp:extent cx=\"{cx}\" cy=\"{cy}\"/>\
+         <wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>\
+         <wp:docPr id=\"{did}\" name=\"{name}\"/>\
+         <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>\
+         <a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+         <pic:pic><pic:nvPicPr><pic:cNvPr id=\"{did}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+         <pic:blipFill><a:blip r:embed=\"rId{rid}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>\
+         </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+    )
 }
 
 /// 表格：全宽、单线边框、表头底纹、按列对齐。
@@ -410,6 +502,8 @@ fn render_inline<'a>(
             );
             format!("<w:hyperlink r:id=\"rId{rid}\">{inner}</w:hyperlink>")
         }
+        // 图片由块级段落渲染处理（独立居中段落），此处兜底防嵌套非法 XML。
+        NodeValue::Image(_) => String::new(),
         NodeValue::SoftBreak | NodeValue::LineBreak => {
             format!(
                 "<w:r><w:rPr>{}</w:rPr><w:br/></w:r>",
@@ -441,6 +535,26 @@ fn run_xml(text: &str, style: &InlineStyle) -> String {
         run_properties(style),
         escape_xml(text)
     )
+}
+
+/// 提取节点下所有内联文本（按顺序拼接）。
+fn collect_text<'a>(node: &'a AstNode<'a>) -> String {
+    let mut s = String::new();
+    collect_text_into(node, &mut s);
+    s
+}
+
+fn collect_text_into<'a>(node: &'a AstNode<'a>, out: &mut String) {
+    match &node.data.borrow().value {
+        NodeValue::Text(t) => out.push_str(t),
+        NodeValue::Code(c) => out.push_str(&c.literal),
+        NodeValue::SoftBreak | NodeValue::LineBreak => out.push('\n'),
+        _ => {
+            for child in node.children() {
+                collect_text_into(child, out);
+            }
+        }
+    }
 }
 
 fn run_properties(style: &InlineStyle) -> String {
