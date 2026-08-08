@@ -12,7 +12,7 @@ struct Cli {
     /// Path to the markdown file
     file: String,
 
-    /// Output format: pdf, html or png
+    /// Output format: pdf, html, png or docx
     #[arg(long, value_enum, default_value_t = OutputFormat::Pdf)]
     format: OutputFormat,
 
@@ -26,6 +26,7 @@ enum OutputFormat {
     Pdf,
     Html,
     Png,
+    Docx,
 }
 
 fn run() -> Result<(), error::MpeError> {
@@ -69,6 +70,10 @@ fn run() -> Result<(), error::MpeError> {
         OutputFormat::Html => {
             let html_path = path.with_extension("html");
             std::fs::write(&html_path, full_html).map_err(error::MpeError::IoError)?;
+        }
+        OutputFormat::Docx => {
+            let docx_path = path.with_extension("docx");
+            md2x_core::docx::convert_markdown_to_docx(body_md, path, &docx_path)?;
         }
         OutputFormat::Pdf | OutputFormat::Png => {
             let temp_dir = std::env::temp_dir().join("rust-mpe-browser");
