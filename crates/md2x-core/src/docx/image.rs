@@ -14,15 +14,20 @@ pub fn resolve_image_bytes(src: &str, md_file: &Path) -> Option<(Vec<u8>, String
 
     let base = md_file.parent().unwrap_or(Path::new("."));
     let hugo_root = converter::find_hugo_root(md_file);
-    let img_path = if Path::new(src).is_absolute() {
+    let img_path = if Path::new(src).is_absolute() && Path::new(src).exists() {
+        // 真实存在的绝对路径文件（兼容 Windows C:\ 与 Unix 绝对路径）
         std::path::PathBuf::from(src)
     } else if src.starts_with('/') {
+        // Hugo 风格：/images/foo.png → <hugo_root>/static/images/foo.png（与 HTML 版一致）
         match hugo_root {
             Some(root) => root
                 .join("static")
                 .join(src.strip_prefix('/').unwrap_or(src)),
             None => return None,
         }
+    } else if Path::new(src).is_absolute() {
+        // 不存在的绝对路径（Windows 盘符路径）按原样读取，交由调用方兜底
+        std::path::PathBuf::from(src)
     } else {
         base.join(src)
     };

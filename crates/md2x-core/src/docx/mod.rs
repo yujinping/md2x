@@ -272,4 +272,21 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn hugo_static_image_path_resolves() {
+        // 构造 Hugo 结构：root/static/images/logo.png + root/content/post/test.md
+        let root = std::env::temp_dir().join("md2x-docx-hugo");
+        let static_img = root.join("static/images/logo.png");
+        std::fs::create_dir_all(static_img.parent().unwrap()).unwrap();
+        let png: &[u8] = include_bytes!("../../../../crates/md2x-gui/icons/32x32.png");
+        std::fs::write(&static_img, png).unwrap();
+        let md_path = root.join("content/post/test.md");
+        std::fs::create_dir_all(md_path.parent().unwrap()).unwrap();
+
+        let content =
+            super::markdown_to_docx_content("![Hugo](/images/logo.png)", &md_path).unwrap();
+        assert_eq!(content.media.len(), 1, "Hugo 静态路径应解析为 static 目录");
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
