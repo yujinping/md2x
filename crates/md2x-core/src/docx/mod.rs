@@ -1,0 +1,69 @@
+//! DOCX 导出：Markdown → OOXML 文档。
+//!
+//! 直接生成 OOXML（zip + XML），不依赖本机 Office/WPS。
+
+pub mod package;
+pub mod render;
+
+use crate::error::MpeError;
+use std::path::Path;
+
+/// 生成的 docx 内容：document.xml 正文 + 内嵌媒体（文件名、字节、content type）。
+pub struct DocxContent {
+    pub document_xml: String,
+    pub media: Vec<(String, Vec<u8>, String)>,
+}
+
+/// 将 Markdown 转换为 docx 内容（不落盘）。
+pub fn markdown_to_docx_content(md: &str, md_file: &Path) -> Result<DocxContent, MpeError> {
+    let body = render::render_body(md, md_file)?;
+    Ok(DocxContent {
+        document_xml: package::document_wrapper(&body),
+        media: Vec::new(),
+    })
+}
+
+/// 将内容写入 .docx 文件。
+pub fn write_docx(content: &DocxContent, dst: &Path) -> Result<(), MpeError> {
+    package::write_package(content, dst)
+}
+
+/// 一步完成 Markdown → .docx 文件。
+pub fn convert_markdown_to_docx(md: &str, md_file: &Path, dst: &Path) -> Result<(), MpeError> {
+    let content = markdown_to_docx_content(md, md_file)?;
+    write_docx(&content, dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn empty_docx_is_valid_zip_with_required_parts() {
+        let dir = std::env::temp_dir().join(format!("md2x-docx-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dst = dir.join("empty.docx");
+        let content = super::markdown_to_docx_content("# 标题", Path::new("test.md")).unwrap();
+        super::write_docx(&content, &dst).unwrap();
+
+        let file = std::fs::File::open(&dst).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
+        for required in [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "word/document.xml",
+            "word/styles.xml",
+        ] {
+            assert!(
+                names.iter().any(|n| n == required),
+                "缺少部件 {required}: {names:?}"
+            );
+        }
+        let mut doc = zip.by_name("word/document.xml").unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut doc, &mut xml).unwrap();
+        assert!(xml.contains("Heading1"), "标题应使用 Heading1 样式");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
