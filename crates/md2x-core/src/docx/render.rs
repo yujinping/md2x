@@ -354,7 +354,8 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
     }
 }
 
-/// 代码块：每行一个段落，深色底纹 + 等宽字体 + token 高亮，文字带内边距。
+/// 代码块：无边框表格承载，单元格底纹与页面左对齐，单元格边距提供
+/// 文字相对黑色底的内部边距（四边），可跨页。
 fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
     let tokens = highlight::highlight_code(lang, code);
     // 将 token 按换行拆分为行
@@ -373,12 +374,8 @@ fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
         }
     }
 
-    render_shaded_code_block(&lines, out);
-}
-
-/// 段落底纹代码块（文字左右缩进形成内边距）。
-fn render_shaded_code_block(lines: &[Vec<(String, String)>], out: &mut String) {
     let n = lines.len();
+    let mut rows = String::new();
     for (i, line) in lines.iter().enumerate() {
         let (before, after) = if n == 1 {
             ("240", "240")
@@ -400,14 +397,30 @@ fn render_shaded_code_block(lines: &[Vec<(String, String)>], out: &mut String) {
                 escape_xml(text)
             ));
         }
-        out.push_str(&format!(
-            "<w:p><w:pPr>\
-             <w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"282C34\"/>\
-             <w:ind w:left=\"240\" w:right=\"240\"/>\
-             <w:spacing w:before=\"{before}\" w:after=\"{after}\" w:line=\"320\" w:lineRule=\"auto\"/>\
-             </w:pPr>{runs}</w:p>"
+        rows.push_str(&format!(
+            "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"9638\" w:type=\"dxa\"/>\
+             <w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"282C34\"/></w:tcPr>\
+             <w:p><w:pPr><w:spacing w:before=\"{before}\" w:after=\"{after}\" \
+             w:line=\"320\" w:lineRule=\"auto\"/></w:pPr>{runs}</w:p></w:tc></w:tr>"
         ));
     }
+    out.push_str(&format!(
+        "<w:tbl><w:tblPr><w:tblW w:w=\"9638\" w:type=\"dxa\"/>\
+         <w:tblBorders>\
+         <w:top w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         <w:left w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         <w:bottom w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         <w:right w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         <w:insideH w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         <w:insideV w:val=\"none\" w:sz=\"0\" w:space=\"0\" w:color=\"auto\"/>\
+         </w:tblBorders>\
+         <w:tblCellMar>\
+         <w:top w:w=\"0\" w:type=\"dxa\"/><w:left w:w=\"240\" w:type=\"dxa\"/>\
+         <w:bottom w:w=\"0\" w:type=\"dxa\"/><w:right w:w=\"240\" w:type=\"dxa\"/>\
+         </w:tblCellMar>\
+         <w:tblLayout w:type=\"fixed\"/></w:tblPr>\
+         <w:tblGrid><w:gridCol w:w=\"9638\"/></w:tblGrid>{rows}</w:tbl>"
+    ));
 }
 
 /// 渲染一个列表（含其下所有条目与嵌套列表）。
