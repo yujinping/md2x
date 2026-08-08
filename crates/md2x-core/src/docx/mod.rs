@@ -226,4 +226,50 @@ mod tests {
         );
         assert!(content.document_xml.contains("项一"), "列表内容");
     }
+
+    #[test]
+    fn heading_run_size_matches_html() {
+        let content =
+            super::markdown_to_docx_content("# H1\n\n## H2\n\n### H3", Path::new("t.md"))
+                .unwrap();
+        // 标题 run 应使用与 HTML 一致的字号（h1=45、h2=36、h3=30 半磅），而非正文 22
+        assert!(
+            content.document_xml.contains("<w:sz w:val=\"45\"/>"),
+            "H1 应 45 半磅"
+        );
+        assert!(
+            content.document_xml.contains("<w:sz w:val=\"36\"/>"),
+            "H2 应 36 半磅"
+        );
+        assert!(
+            content.document_xml.contains("<w:sz w:val=\"30\"/>"),
+            "H3 应 30 半磅"
+        );
+    }
+
+    #[test]
+    fn svg_image_embeds_with_dimensions() {
+        let dir = std::env::temp_dir().join("md2x-docx-svg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let svg_path = dir.join("icon.svg");
+        std::fs::write(
+            &svg_path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#0969da"/></svg>"##,
+        )
+        .unwrap();
+        let md = format!("![SVG]({})", svg_path.display());
+        let content = super::markdown_to_docx_content(&md, &svg_path).unwrap();
+        assert_eq!(content.media.len(), 1, "SVG 应被嵌入");
+        assert!(
+            content.media[0].2.contains("svg"),
+            "SVG content type: {}",
+            content.media[0].2
+        );
+        assert!(content.document_xml.contains("<w:drawing>"), "应有 drawing");
+        assert!(
+            content.document_xml.contains("cx=\"1905000\""),
+            "SVG 宽度 200px → 1905000 EMU"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

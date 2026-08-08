@@ -39,7 +39,54 @@ pub fn image_dimensions(bytes: &[u8], mime: &str) -> Option<(u32, u32)> {
         m if m.contains("gif") => gif_dimensions(bytes),
         m if m.contains("bmp") => bmp_dimensions(bytes),
         m if m.contains("webp") => webp_dimensions(bytes),
+        m if m.contains("svg") => svg_dimensions(bytes),
         _ => None,
+    }
+}
+
+fn svg_dimensions(b: &[u8]) -> Option<(u32, u32)> {
+    let s = std::str::from_utf8(b).ok()?;
+    let w = svg_attr(s, "width").unwrap_or(0);
+    let h = svg_attr(s, "height").unwrap_or(0);
+    if w > 0 && h > 0 {
+        return Some((w, h));
+    }
+    svg_viewbox(s)
+}
+
+fn svg_attr(s: &str, name: &str) -> Option<u32> {
+    for quote in ['"', '\''] {
+        let pat = format!("{name}={quote}");
+        if let Some(i) = s.find(&pat) {
+            let rest = &s[i + pat.len()..];
+            let end = rest.find(quote)?;
+            let val: String = rest[..end]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if val.is_empty() {
+                return None;
+            }
+            return val.parse::<f32>().ok().map(|v| v as u32);
+        }
+    }
+    None
+}
+
+fn svg_viewbox(s: &str) -> Option<(u32, u32)> {
+    let i = s.find("viewBox")?;
+    let after = &s[i + 7..];
+    let start = after.find('"').or_else(|| after.find('\''))?;
+    let rest = &after[start + 1..];
+    let end = rest.find('"').or_else(|| rest.find('\''))?;
+    let nums: Vec<f32> = rest[..end]
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    if nums.len() >= 4 && nums[2] > 0.0 && nums[3] > 0.0 {
+        Some((nums[2] as u32, nums[3] as u32))
+    } else {
+        None
     }
 }
 
@@ -142,7 +189,9 @@ fn i32_le(b: &[u8]) -> Option<i32> {
 
 /// 由 content type 推断文件扩展名。
 pub fn ext_from_mime(mime: &str) -> &'static str {
-    if mime.contains("jpeg") {
+    if mime.contains("svg") {
+        "svg"
+    } else if mime.contains("jpeg") {
         "jpeg"
     } else if mime.contains("gif") {
         "gif"

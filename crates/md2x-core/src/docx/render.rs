@@ -28,6 +28,8 @@ struct InlineStyle {
     code: bool,
     link: bool,
     quote: bool,
+    /// 字号（半磅）。None 表示正文 22（11pt）。
+    size: Option<u32>,
 }
 
 /// 将 Markdown 渲染为 document.xml 的 body 内容，同时收集媒体与链接。
@@ -63,14 +65,23 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
     match value {
         NodeValue::Heading(h) => {
             let lvl = h.level.clamp(1, 6);
+            let size = heading_size(lvl);
+            let (before, after) = heading_spacing(lvl);
             let mut content = String::new();
             for child in node.children() {
-                content.push_str(&render_inline(child, InlineStyle::default(), ctx));
+                content.push_str(&render_inline(
+                    child,
+                    InlineStyle {
+                        size: Some(size),
+                        ..InlineStyle::default()
+                    },
+                    ctx,
+                ));
             }
-            let (before, after) = heading_spacing(lvl);
             out.push_str(&format!(
                 "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/>\
-                 <w:spacing w:before=\"{before}\" w:after=\"{after}\"/></w:pPr>{content}</w:p>"
+                 <w:spacing w:before=\"{before}\" w:after=\"{after}\" w:line=\"250\" \
+                 w:lineRule=\"auto\"/></w:pPr>{content}</w:p>"
             ));
         }
         NodeValue::Paragraph => {
@@ -155,9 +166,8 @@ fn render_image<'a>(node: &'a AstNode<'a>, ctx: &mut RenderCtx) -> String {
         );
     };
 
-    let Some((w, h)) = image::image_dimensions(&bytes, &mime) else {
-        return String::new();
-    };
+    // 尺寸解析失败时兜底为 480x360，保证图片不丢失
+    let (w, h) = image::image_dimensions(&bytes, &mime).unwrap_or((480, 360));
     // 像素 → EMU（96dpi：1px = 9525 EMU），超宽等比缩放
     let max_cx = 5_760_720u64;
     let mut cx = w as u64 * 9525;
@@ -172,7 +182,9 @@ fn render_image<'a>(node: &'a AstNode<'a>, ctx: &mut RenderCtx) -> String {
     let did = ctx.next_drawing_id;
     ctx.next_drawing_id += 1;
     let name = format!("image{rid}.{}", image::ext_from_mime(&mime));
-    let ct = if mime.contains("jpeg") {
+    let ct = if mime.contains("svg") {
+        "image/svg+xml"
+    } else if mime.contains("jpeg") {
         "image/jpeg"
     } else if mime.contains("gif") {
         "image/gif"
@@ -314,19 +326,22 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
         }
         NodeValue::Heading(h) => {
             let lvl = h.level.clamp(1, 6);
+            let size = heading_size(lvl);
             let mut content = String::new();
             for gc in node.children() {
                 content.push_str(&render_inline(
                     gc,
                     InlineStyle {
                         quote: true,
+                        size: Some(size),
                         ..InlineStyle::default()
                     },
                     ctx,
                 ));
             }
             out.push_str(&format!(
-                "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/>{QUOTE_PPR}</w:pPr>{content}</w:p>"
+                "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/>\
+                 <w:spacing w:line=\"250\" w:lineRule=\"auto\"/>{QUOTE_PPR}</w:pPr>{content}</w:p>"
             ));
         }
         _ => {}
@@ -467,6 +482,17 @@ fn heading_spacing(level: u8) -> (u32, u32) {
     }
 }
 
+/// 标题字号（半磅），对应 HTML 模板 h1-h6 的 font-size。
+fn heading_size(level: u8) -> u32 {
+    match level {
+        1 => 45,
+        2 => 36,
+        3 => 30,
+        4 => 26,
+        _ => 22,
+    }
+}
+
 /// 渲染一个内联节点，返回 run（或 hyperlink）XML。
 fn render_inline<'a>(
     node: &'a AstNode<'a>,
@@ -564,14 +590,18 @@ fn run_properties(style: &InlineStyle) -> String {
             "<w:rFonts w:ascii=\"Consolas\" w:eastAsia=\"Microsoft YaHei\" \
              w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>",
         );
-        rpr.push_str("<w:color w:val=\"d63384\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>");
+        let sz = style.size.unwrap_or(20);
+        rpr.push_str(&format!(
+            "<w:color w:val=\"d63384\"/><w:sz w:val=\"{sz}\"/><w:szCs w:val=\"{sz}\"/>"
+        ));
         rpr.push_str("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"f0f0f0\"/>");
     } else {
         rpr.push_str(
             "<w:rFonts w:ascii=\"Segoe UI\" w:eastAsia=\"Microsoft YaHei\" \
              w:hAnsi=\"Segoe UI\" w:cs=\"Segoe UI\"/>",
         );
-        rpr.push_str("<w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/>");
+        let sz = style.size.unwrap_or(22);
+        rpr.push_str(&format!("<w:sz w:val=\"{sz}\"/><w:szCs w:val=\"{sz}\"/>"));
         if style.link {
             rpr.push_str("<w:color w:val=\"0366d6\"/><w:u w:val=\"single\"/>");
         } else if style.quote {
