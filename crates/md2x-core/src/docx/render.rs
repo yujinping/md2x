@@ -85,20 +85,13 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
             ));
         }
         NodeValue::Paragraph => {
-            let mut content = String::new();
-            for child in node.children() {
-                if matches!(&child.data.borrow().value, NodeValue::Image(_)) {
-                    if !content.is_empty() {
-                        flush_paragraph(&mut content, out);
-                    }
-                    out.push_str(&render_image(child, ctx));
-                } else {
-                    content.push_str(&render_inline(child, InlineStyle::default(), ctx));
-                }
-            }
-            if !content.is_empty() {
-                flush_paragraph(&mut content, out);
-            }
+            render_para_children(
+                node,
+                InlineStyle::default(),
+                "<w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/>",
+                out,
+                ctx,
+            );
         }
         NodeValue::List(_) => {
             render_list(node, 0, false, out, ctx);
@@ -130,15 +123,32 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
     }
 }
 
-fn flush_paragraph(content: &mut String, out: &mut String) {
+/// 渲染段落子节点：普通行内内容合成一个段落；图片独立成居中段落（防非法嵌套）。
+fn render_para_children<'a>(
+    node: &'a AstNode<'a>,
+    style: InlineStyle,
+    ppr: &str,
+    out: &mut String,
+    ctx: &mut RenderCtx,
+) {
+    let mut content = String::new();
+    for child in node.children() {
+        if matches!(&child.data.borrow().value, NodeValue::Image(_)) {
+            if !content.is_empty() {
+                out.push_str(&format!(
+                    "<w:p><w:pPr>{ppr}</w:pPr>{content}</w:p>"
+                ));
+                content.clear();
+            }
+            out.push_str(&render_image(child, ctx));
+        } else {
+            content.push_str(&render_inline(child, style, ctx));
+        }
+    }
     if content.is_empty() {
         return;
     }
-    out.push_str(&format!(
-        "<w:p><w:pPr><w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/>\
-         </w:pPr>{content}</w:p>"
-    ));
-    content.clear();
+    out.push_str(&format!("<w:p><w:pPr>{ppr}</w:pPr>{content}</w:p>"));
 }
 
 /// 渲染图片为居中段落 + w:drawing。
@@ -295,20 +305,16 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
 
     match &node.data.borrow().value {
         NodeValue::Paragraph => {
-            let mut content = String::new();
-            for gc in node.children() {
-                content.push_str(&render_inline(
-                    gc,
-                    InlineStyle {
-                        quote: true,
-                        ..InlineStyle::default()
-                    },
-                    ctx,
-                ));
-            }
-            if !content.is_empty() {
-                out.push_str(&format!("<w:p><w:pPr>{QUOTE_PPR}</w:pPr>{content}</w:p>"));
-            }
+            render_para_children(
+                node,
+                InlineStyle {
+                    quote: true,
+                    ..InlineStyle::default()
+                },
+                QUOTE_PPR,
+                out,
+                ctx,
+            );
         }
         NodeValue::List(_) => render_list(node, 0, true, out, ctx),
         NodeValue::CodeBlock(cb) => {
@@ -436,15 +442,18 @@ fn render_list_item<'a>(
         match &child.data.borrow().value {
             NodeValue::Paragraph => {
                 for gc in child.children() {
-                    content.push_str(&render_inline(gc, InlineStyle::default(), ctx));
+                    if matches!(&gc.data.borrow().value, NodeValue::Image(_)) {
+                        // 列表项内的图片独立成居中段落（带 numPr 会破坏布局）
+                        nested.push_str(&render_image(gc, ctx));
+                    } else {
+                        content.push_str(&render_inline(gc, InlineStyle::default(), ctx));
+                    }
                 }
             }
             NodeValue::List(_) => {
                 render_list(child, depth + 1, quote, &mut nested, ctx);
             }
-            _ => {
-                content.push_str(&render_inline(child, InlineStyle::default(), ctx));
-            }
+            _ => content.push_str(&render_inline(child, InlineStyle::default(), ctx)),
         }
     }
 
@@ -452,11 +461,13 @@ fn render_list_item<'a>(
         let mark = if checked.is_some() { "☑ " } else { "☐ " };
         content.insert_str(0, &run_xml(mark, &InlineStyle::default()));
         let quote_ppr = if quote { QUOTE_LIST_PPR } else { "" };
-        out.push_str(&format!(
-            "<w:p><w:pPr>{quote_ppr}<w:ind w:left=\"480\"/>\
-             <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>{content}</w:p>"
-        ));
-    } else {
+        if !content.is_empty() {
+            out.push_str(&format!(
+                "<w:p><w:pPr>{quote_ppr}<w:ind w:left=\"480\"/>\
+                 <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"60\"/></w:pPr>{content}</w:p>"
+            ));
+        }
+    } else if !content.is_empty() {
         let quote_ppr = if quote { QUOTE_LIST_PPR } else { "" };
         out.push_str(&format!(
             "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{depth}\"/><w:numId w:val=\"{num_id}\"/>\

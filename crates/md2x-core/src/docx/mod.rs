@@ -289,4 +289,21 @@ mod tests {
         assert_eq!(content.media.len(), 1, "Hugo 静态路径应解析为 static 目录");
         std::fs::remove_dir_all(&root).ok();
     }
+
+    #[test]
+    fn image_inside_list_item_embeds() {
+        let dir = std::env::temp_dir().join("md2x-docx-li-img");
+        std::fs::create_dir_all(&dir).unwrap();
+        let png_path = dir.join("p.png");
+        let png: &[u8] = include_bytes!("../../../../crates/md2x-gui/icons/32x32.png");
+        std::fs::write(&png_path, png).unwrap();
+        let md = format!("- 列表项\n  ![图]({})", png_path.display());
+        let content = super::markdown_to_docx_content(&md, &png_path).unwrap();
+        assert_eq!(content.media.len(), 1, "列表内图片应嵌入");
+        assert!(
+            content.document_xml.contains("<w:drawing>"),
+            "列表内图片应有 drawing"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
