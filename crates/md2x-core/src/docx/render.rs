@@ -59,8 +59,10 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
             for child in node.children() {
                 content.push_str(&render_inline(child, InlineStyle::default(), ctx));
             }
+            let (before, after) = heading_spacing(lvl);
             out.push_str(&format!(
-                "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/></w:pPr>{content}</w:p>"
+                "<w:p><w:pPr><w:pStyle w:val=\"Heading{lvl}\"/>\
+                 <w:spacing w:before=\"{before}\" w:after=\"{after}\"/></w:pPr>{content}</w:p>"
             ));
         }
         NodeValue::Paragraph => {
@@ -76,6 +78,16 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
             }
         }
         _ => {}
+    }
+}
+
+/// 标题段距（对应 HTML 模板 h1-h6 的 margin）。
+fn heading_spacing(level: u8) -> (u32, u32) {
+    match level {
+        1 | 2 => (450, 150),
+        3 => (420, 120),
+        4 => (390, 90),
+        _ => (360, 90),
     }
 }
 

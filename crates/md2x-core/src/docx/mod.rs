@@ -91,4 +91,38 @@ mod tests {
         );
         assert!(content.document_xml.contains("<w:br/>"), "换行");
     }
+
+    #[test]
+    fn headings_use_heading_styles_and_outline() {
+        let content =
+            super::markdown_to_docx_content("# H1\n\n## H2\n\n### H3", Path::new("t.md"))
+                .unwrap();
+        for lvl in ["Heading1", "Heading2", "Heading3"] {
+            assert!(
+                content
+                    .document_xml
+                    .contains(&format!("w:val=\"{lvl}\"")),
+                "缺少 {lvl}"
+            );
+        }
+        // 标题段距（与 HTML margin 对应）
+        assert!(content.document_xml.contains("w:before=\"450\""));
+        assert!(content.document_xml.contains("w:before=\"420\""));
+
+        let dir = std::env::temp_dir().join("md2x-docx-styles");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dst = dir.join("h.docx");
+        super::write_docx(&content, &dst).unwrap();
+        let file = std::fs::File::open(&dst).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut styles = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("word/styles.xml").unwrap(),
+            &mut styles,
+        )
+        .unwrap();
+        assert!(styles.contains("Heading1"), "styles.xml 应含 Heading1");
+        assert!(styles.contains("outlineLvl"), "styles.xml 应含 outlineLvl");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
