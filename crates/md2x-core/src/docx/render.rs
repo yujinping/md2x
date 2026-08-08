@@ -1,7 +1,7 @@
 //! comrak AST → OOXML 片段渲染。
 
 use crate::error::MpeError;
-use comrak::nodes::{AstNode, ListType, NodeValue};
+use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
 use std::path::Path;
 
 use super::highlight;
@@ -103,8 +103,84 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
                  <w:spacing w:before=\"360\" w:after=\"360\"/></w:pPr></w:p>",
             );
         }
+        NodeValue::Table(table) => {
+            render_table(table.alignments.clone(), node, out, ctx);
+        }
         _ => {}
     }
+}
+
+/// 表格：全宽、单线边框、表头底纹、按列对齐。
+fn render_table<'a>(
+    alignments: Vec<TableAlignment>,
+    node: &'a AstNode<'a>,
+    out: &mut String,
+    ctx: &mut RenderCtx,
+) {
+    let ncols = alignments.len().max(1);
+    let col_w = 9638 / ncols as u32;
+    let mut grid = String::new();
+    for _ in 0..ncols {
+        grid.push_str(&format!("<w:gridCol w:w=\"{col_w}\"/>"));
+    }
+
+    let mut rows = String::new();
+    for row in node.children() {
+        let is_header = matches!(&row.data.borrow().value, NodeValue::TableRow(true));
+        let mut cells = String::new();
+        for (i, cell) in row.children().enumerate() {
+            let align = alignments.get(i).copied().unwrap_or(TableAlignment::None);
+            let jc = match align {
+                TableAlignment::Center => Some("center"),
+                TableAlignment::Right => Some("right"),
+                _ => None,
+            };
+            let mut content = String::new();
+            for gc in cell.children() {
+                content.push_str(&render_inline(
+                    gc,
+                    InlineStyle {
+                        bold: is_header,
+                        ..InlineStyle::default()
+                    },
+                    ctx,
+                ));
+            }
+            let shd = if is_header {
+                "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"f6f8fa\"/>"
+            } else {
+                ""
+            };
+            let jc_xml = jc
+                .map(|j| format!("<w:jc w:val=\"{j}\"/>"))
+                .unwrap_or_default();
+            cells.push_str(&format!(
+                "<w:tc><w:tcPr><w:tcW w:w=\"{col_w}\" w:type=\"dxa\"/>{shd}\
+                 <w:vAlign w:val=\"top\"/></w:tcPr>\
+                 <w:p><w:pPr>{jc_xml}<w:spacing w:line=\"300\" w:lineRule=\"auto\" w:after=\"0\"/>\
+                 </w:pPr>{content}</w:p></w:tc>"
+            ));
+        }
+        rows.push_str(&format!("<w:tr>{cells}</w:tr>"));
+    }
+
+    out.push_str(&format!(
+        "<w:tbl><w:tblPr><w:tblW w:w=\"9638\" w:type=\"dxa\"/>\
+         <w:tblBorders>\
+         <w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         <w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         <w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         <w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         <w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         <w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"dfe2e5\"/>\
+         </w:tblBorders>\
+         <w:tblCellMar>\
+         <w:top w:w=\"120\" w:type=\"dxa\"/><w:left w:w=\"180\" w:type=\"dxa\"/>\
+         <w:bottom w:w=\"120\" w:type=\"dxa\"/><w:right w:w=\"180\" w:type=\"dxa\"/>\
+         </w:tblCellMar>\
+         <w:tblLayout w:type=\"autofit\"/></w:tblPr>\
+         <w:tblGrid>{grid}</w:tblGrid>{rows}</w:tbl>"
+    ));
 }
 
 /// 引用块内的块级元素（继承引用样式：缩进、左边框、浅色背景、灰字）。

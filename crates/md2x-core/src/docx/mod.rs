@@ -161,4 +161,23 @@ mod tests {
         assert!(content.document_xml.contains("fafbfc"), "引用背景");
         assert!(content.document_xml.contains("eaecef"), "分割线颜色");
     }
+
+    #[test]
+    fn table_renders_with_borders_and_header_shading() {
+        let content = super::markdown_to_docx_content(
+            "| 名称 | 数量 |\n| --- | ---: |\n| 苹果 | 3 |",
+            Path::new("t.md"),
+        )
+        .unwrap();
+        assert!(content.document_xml.contains("<w:tbl>"), "应有表格");
+        assert!(content.document_xml.contains("dfe2e5"), "边框色");
+        assert!(content.document_xml.contains("f6f8fa"), "表头底纹");
+        assert!(
+            content
+                .document_xml
+                .contains("w:jc w:val=\"right\""),
+            "右对齐列"
+        );
+        assert!(content.document_xml.contains("<w:tblGrid>"), "表格网格");
+    }
 }
