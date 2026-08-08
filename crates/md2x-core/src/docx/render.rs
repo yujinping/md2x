@@ -4,6 +4,8 @@ use crate::error::MpeError;
 use comrak::nodes::{AstNode, ListType, NodeValue};
 use std::path::Path;
 
+use super::highlight;
+
 /// 渲染上下文：统一分配 document.xml.rels 的 rId（rId1=styles、rId2=numbering，之后按文档顺序）。
 #[derive(Default)]
 pub struct RenderCtx {
@@ -80,7 +82,66 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
         NodeValue::List(_) => {
             render_list(node, 0, out, ctx);
         }
+        NodeValue::CodeBlock(cb) => {
+            let lang = if cb.info.trim().is_empty() {
+                None
+            } else {
+                Some(cb.info.trim())
+            };
+            render_code_block(lang, &cb.literal, out);
+        }
         _ => {}
+    }
+}
+
+/// 代码块：每行一个段落，深色底纹 + 等宽字体 + token 高亮。
+fn render_code_block(lang: Option<&str>, code: &str, out: &mut String) {
+    let tokens = highlight::highlight_code(lang, code);
+    // 将 token 按换行拆分为行
+    let mut lines: Vec<Vec<(String, String)>> = vec![Vec::new()];
+    for (text, color) in tokens {
+        let parts: Vec<&str> = text.split('\n').collect();
+        for (i, part) in parts.iter().enumerate() {
+            if i > 0 {
+                lines.push(Vec::new());
+            }
+            if !part.is_empty() {
+                if let Some(last) = lines.last_mut() {
+                    last.push((part.to_string(), color.clone()));
+                }
+            }
+        }
+    }
+
+    let n = lines.len();
+    for (i, line) in lines.iter().enumerate() {
+        let (before, after) = if n == 1 {
+            ("240", "240")
+        } else if i == 0 {
+            ("240", "0")
+        } else if i == n - 1 {
+            ("0", "240")
+        } else {
+            ("0", "0")
+        };
+        let mut runs = String::new();
+        for (text, color) in line {
+            runs.push_str(&format!(
+                "<w:r><w:rPr>\
+                 <w:rFonts w:ascii=\"Consolas\" w:eastAsia=\"Microsoft YaHei\" \
+                 w:hAnsi=\"Consolas\" w:cs=\"Consolas\"/>\
+                 <w:color w:val=\"{color}\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/>\
+                 </w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                escape_xml(text)
+            ));
+        }
+        out.push_str(&format!(
+            "<w:p><w:pPr>\
+             <w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"282C34\"/>\
+             <w:ind w:left=\"240\" w:right=\"240\"/>\
+             <w:spacing w:before=\"{before}\" w:after=\"{after}\" w:line=\"320\" w:lineRule=\"auto\"/>\
+             </w:pPr>{runs}</w:p>"
+        ));
     }
 }
 

@@ -4,6 +4,7 @@
 
 pub mod package;
 pub mod render;
+pub mod highlight;
 
 use crate::error::MpeError;
 use std::path::Path;
@@ -138,5 +139,16 @@ mod tests {
         assert!(content.document_xml.contains("w:numId w:val=\"2\""), "有序列表");
         assert!(content.document_xml.contains("☑"), "已完成任务");
         assert!(content.document_xml.contains("☐"), "未完成任务");
+    }
+
+    #[test]
+    fn code_block_has_dark_shading_and_highlight_colors() {
+        let content =
+            super::markdown_to_docx_content("```rust\nfn main() {}\n```", Path::new("t.md"))
+                .unwrap();
+        assert!(content.document_xml.contains("282C34"), "代码块底纹");
+        assert!(content.document_xml.contains("ABB2BF"), "代码前景");
+        assert!(content.document_xml.contains("C678DD"), "关键字高亮色");
+        assert!(content.document_xml.contains("Consolas"), "等宽字体");
     }
 }
