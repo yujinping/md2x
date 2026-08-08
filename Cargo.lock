@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "md2x-cli"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "clap",
  "md2x-core",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "md2x-core"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "comrak",
  "syntect",
@@ -2119,7 +2119,7 @@ dependencies = [
 
 [[package]]
 name = "md2x-gui"
-version = "0.1.7"
+version = "0.2.0"
 dependencies = [
  "md2x-core",
  "serde",
