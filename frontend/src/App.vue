@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from './stores/settings.js'
 import { t } from './i18n/index.js'
@@ -26,7 +26,26 @@ function setStatus(msg, type) {
   statusType.value = type || ''
 }
 
-async function openMdFile(path) {
+// 导航历史栈（绝对路径），供工具栏前进/后退使用
+const history = ref([])
+const historyIndex = ref(-1)
+const canGoBack = computed(() => historyIndex.value > 0)
+const canGoForward = computed(
+  () => historyIndex.value >= 0 && historyIndex.value < history.value.length - 1,
+)
+
+/// 把一次导航压入历史栈：与当前相同则不重复；处于历史中间则截断前进分支
+function pushHistory(path) {
+  if (historyIndex.value >= 0 && history.value[historyIndex.value] === path) return
+  if (historyIndex.value < history.value.length - 1) {
+    history.value = history.value.slice(0, historyIndex.value + 1)
+  }
+  history.value.push(path)
+  historyIndex.value = history.value.length - 1
+}
+
+/// 打开文件并渲染预览（不改动历史栈），前进/后退也走这里
+async function openFileAndRender(path) {
   currentPath.value = path
   previewState.value = null
   setStatus('statusGenerating', 'busy')
@@ -37,6 +56,26 @@ async function openMdFile(path) {
     return
   }
   await loadPreview()
+}
+
+/// 打开文件并记入历史（链接点击 / 打开文件 / 拖拽均走此入口）
+async function openMdFile(path) {
+  pushHistory(path)
+  await openFileAndRender(path)
+}
+
+/// 后退：回到历史中的上一份文件
+async function goBack() {
+  if (!canGoBack.value) return
+  historyIndex.value -= 1
+  await openFileAndRender(history.value[historyIndex.value])
+}
+
+/// 前进：回到历史中的下一份文件
+async function goForward() {
+  if (!canGoForward.value) return
+  historyIndex.value += 1
+  await openFileAndRender(history.value[historyIndex.value])
 }
 
 async function loadPreview() {
@@ -105,22 +144,33 @@ function injectLinkHandler(html) {
 }
 
 /// 处理 iframe 转发来的内部链接点击：解析为绝对路径并在应用内打开
-function resolveAndOpen(href) {
+async function resolveAndOpen(href) {
+  // 以当前打开文件所在目录为基准解析相对链接；
+  // 若前端记录的当前路径为空（极端时序），回退到 Rust 端权威路径
+  let basePath = currentPath.value
+  if (!basePath) {
+    try { basePath = (await invoke('get_file_path')) || '' } catch (_) {}
+  }
+  if (!basePath) return
+
   let target
   if (href.startsWith('file://')) {
     target = decodeURIComponent(href.replace(/^file:\/\//, ''))
     if (!target.startsWith('/') && !target.startsWith('//')) target = '/' + target
   } else {
     // 相对路径：以当前打开文件所在目录为基准解析（支持 ./ ../ 与 %20 等编码）
-    const dir = currentPath.value.replace(/\/[^/]*$/, '')
+    const dir = basePath.replace(/[\\/][^\\/]*$/, '')
     const base = 'file://' + (dir.startsWith('/') ? '' : '/') + dir + '/'
     try {
-      target = new URL(href, base).pathname
+      // new URL 会把中文等非 ASCII 字符做百分号编码，pathname 不是真实文件路径，
+      // 必须 decodeURIComponent 还原成文件系统真实路径，否则 set_file 找不到文件
+      target = decodeURIComponent(new URL(href, base).pathname)
     } catch (err) {
       return
     }
   }
   if (!target || !/\.md$/i.test(target)) return
+  // 在应用内以 HTML 方式打开该 .md（openMdFile 会重新渲染预览）
   openMdFile(target)
 }
 
@@ -241,18 +291,26 @@ onMounted(() => {
   }, 500)
   // 监听内嵌预览页转发来的内部链接点击
   window.addEventListener('message', onIframeMessage)
-  // Initial file check
-  invoke('get_file_path').then(p => { if (p) currentPath.value = p }).catch(() => {})
+  // Initial file check（并以此为历史起点）
+  invoke('get_file_path').then(p => {
+    if (p) { currentPath.value = p; history.value = [p]; historyIndex.value = 0 }
+  }).catch(() => {})
   invoke('get_file_name').then(n => {
     if (n) { fileName.value = n; loadPreview() }
   }).catch(() => {})
   setStatus('statusReady', 'ready')
 
-  // 键盘快捷键：Cmd+O / Ctrl+O 打开文件
+  // 键盘快捷键：Cmd+O / Ctrl+O 打开文件；Alt+← / Alt+→ 前进后退
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
       e.preventDefault()
       onOpenFile()
+    } else if (e.altKey && e.key === 'ArrowLeft') {
+      e.preventDefault()
+      goBack()
+    } else if (e.altKey && e.key === 'ArrowRight') {
+      e.preventDefault()
+      goForward()
     }
   })
 })
@@ -262,8 +320,6 @@ const showSettings = ref(false)
 const isDragging = ref(false)
 
 async function onOpenFile() {
-  previewState.value = null
-  setStatus('statusGenerating', 'busy')
   try {
     const p = await invoke('plugin:dialog|open', {
       options: {
@@ -274,13 +330,10 @@ async function onOpenFile() {
       }
     })
     if (!p) return
-    currentPath.value = p
-    await invoke('set_file', { path: p })
+    await openMdFile(p)
   } catch (e) {
     setStatus(e.toString(), 'error')
-    return
   }
-  await loadPreview()
 }
 </script>
 
@@ -290,11 +343,15 @@ async function onOpenFile() {
       :hasFile="hasFile"
       :isPdfView="isPdfView"
       :fileName="fileName"
+      :can-go-back="canGoBack"
+      :can-go-forward="canGoForward"
       @open-file="onOpenFile"
       @export-pdf="onExportPdf"
       @save-pdf="onSavePdf"
       @show-html="showHtmlPreview"
       @export-doc="onExportDoc"
+      @nav-back="goBack"
+      @nav-forward="goForward"
     />
 
     <main

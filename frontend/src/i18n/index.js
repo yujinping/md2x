@@ -2,7 +2,7 @@ export const i18n = {
   'zh-CN': {
     settingsTitle: '设置', settingsTheme: '主题', themeDark: '深色', themeLight: '浅色',
     settingsLang: '语言', btnClose: '关闭',
-    btnOpen: '打开文件', btnPreviewPdf: '预览 PDF', btnBack: '返回预览', btnSave: '保存 PDF',
+    btnOpen: '打开文件', btnPreviewPdf: '预览 PDF', btnBack: '返回预览', btnSave: '保存 PDF', navBack: '后退', navForward: '前进',
     btnExport: '导出', exportHtml: 'HTML', exportPdf: 'PDF', exportDocx: 'DOCX',
     statusExporting: '正在导出…', statusExportReady: '导出完成', statusExportError: '导出失败',
     welcomeTitle: '准备就绪', welcomeSub: '打开一个 Markdown 文档，即可预览并导出为 PDF',
@@ -21,7 +21,7 @@ export const i18n = {
   'en': {
     settingsTitle: 'Settings', settingsTheme: 'Theme', themeDark: 'Dark', themeLight: 'Light',
     settingsLang: 'Language', btnClose: 'Close',
-    btnOpen: 'Open File', btnPreviewPdf: 'Preview PDF', btnBack: '← Back', btnSave: 'Save PDF',
+    btnOpen: 'Open File', btnPreviewPdf: 'Preview PDF', btnBack: '← Back', btnSave: 'Save PDF', navBack: 'Back', navForward: 'Forward',
     btnExport: 'Export', exportHtml: 'HTML', exportPdf: 'PDF', exportDocx: 'DOCX',
     statusExporting: 'Exporting…', statusExportReady: 'Exported', statusExportError: 'Export failed',
     welcomeTitle: 'Ready', welcomeSub: 'Open a Markdown file to preview and export as PDF',

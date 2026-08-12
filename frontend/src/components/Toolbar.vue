@@ -8,8 +8,10 @@ const props = defineProps({
   hasFile: Boolean,
   isPdfView: Boolean,
   fileName: String,
+  canGoBack: Boolean,
+  canGoForward: Boolean,
 })
-const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc'])
+const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward'])
 const settings = useSettingsStore()
 const exportOpen = ref(false)
 
@@ -70,6 +72,16 @@ async function onOpenFile() {
         class="font-mono text-xs px-2 py-0.5 rounded max-w-[360px] truncate"
         :style="{ color: fileName ? 'var(--text)' : 'var(--text-muted)', background: 'var(--surface-hover)' }"
       >{{ fileName }}</span>
+
+      <!-- 前进/后退导航 -->
+      <div class="flex items-center gap-1 ml-1">
+        <button class="btn btn-icon" :disabled="!canGoBack" :title="t('navBack', settings.lang)" @click="emit('nav-back')">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M10 8H4"/><path d="M7 5l-3 3 3 3"/></svg>
+        </button>
+        <button class="btn btn-icon" :disabled="!canGoForward" :title="t('navForward', settings.lang)" @click="emit('nav-forward')">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M6 8h6"/><path d="M9 5l3 3-3 3"/></svg>
+        </button>
+      </div>
     </div>
 
     <div class="flex gap-1.5 flex-shrink-0" style="-webkit-app-region: no-drag">
@@ -147,6 +159,7 @@ async function onOpenFile() {
 .btn-amber:hover { background: var(--amber-hover); border-color: var(--amber-hover); }
 .btn-ghost { border-color: transparent; color: var(--text-muted); }
 .btn-ghost:hover { color: var(--text); }
+.btn-icon { width: 32px; padding: 0; justify-content: center; }
 .dropdown-item {
   display: flex;
   align-items: center;
