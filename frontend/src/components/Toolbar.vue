@@ -11,7 +11,7 @@ const props = defineProps({
   canGoBack: Boolean,
   canGoForward: Boolean,
 })
-const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward'])
+const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward', 'toggle-full-width'])
 const settings = useSettingsStore()
 const exportOpen = ref(false)
 
@@ -32,6 +32,11 @@ function onClickOutside(e) {
 
 onMounted(() => document.addEventListener('click', onClickOutside))
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
+
+function onToggleFullWidth() {
+  settings.setFullWidth(!settings.fullWidth)
+  emit('toggle-full-width')
+}
 
 async function onOpenFile() {
   try {
@@ -55,15 +60,11 @@ async function onOpenFile() {
     :style="{ background: 'var(--surface)' }"
   >
     <div class="flex items-center gap-2.5 min-w-0">
-      <!-- Brand -->
-      <span class="flex items-center gap-0.5 text-[15px] font-semibold tracking-tight flex-shrink-0" :style="{ color: 'var(--text)' }">
-        <span class="font-medium text-[13px] tracking-wide" :style="{ color: 'var(--text-muted)' }">Markdown</span>
-        <span class="inline-flex items-center mx-0.5 transition-colors duration-300" :style="{ color: hasFile ? 'var(--amber)' : 'var(--text-dim)' }">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-[13px] h-[13px]">
-            <path d="M3 8h10"/><path d="M9 4l4 4-4 4"/>
-          </svg>
-        </span>
-        <span class="font-bold text-[15px] tracking-tight" :style="{ color: 'var(--accent)' }">PDF</span>
+      <!-- Brand: MD2x 字体式 wordmark，x 是"可变的输出格式"变量 -->
+      <span class="flex items-center gap-px flex-shrink-0" :title="t('brandHint', settings.lang)">
+        <span class="text-[15px] font-extrabold tracking-tight" :style="{ color: 'var(--text)' }">MD</span>
+        <span class="text-[12px] font-bold tracking-tight" :style="{ color: 'var(--text-muted)' }">2</span>
+        <span class="text-[16px] font-extrabold italic leading-none transition-colors duration-300" :style="{ color: hasFile ? 'var(--amber)' : 'var(--accent)' }">x</span>
       </span>
 
       <!-- File name -->
@@ -82,6 +83,11 @@ async function onOpenFile() {
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M6 8h6"/><path d="M9 5l3 3-3 3"/></svg>
         </button>
       </div>
+
+      <!-- 全宽显示切换 -->
+      <button class="btn btn-icon" :class="{ 'btn-active': settings.fullWidth }" :title="t('btnFullWidth', settings.lang)" @click="onToggleFullWidth">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M3 6V3h3"/><path d="M13 6V3h-3"/><path d="M3 10v3h3"/><path d="M13 10v3h-3"/></svg>
+      </button>
     </div>
 
     <div class="flex gap-1.5 flex-shrink-0" style="-webkit-app-region: no-drag">
@@ -102,10 +108,6 @@ async function onOpenFile() {
         <button class="btn" @click="onOpenFile">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M2 5l6-3 6 3v7l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><path d="M8 8v7"/></svg>
           {{ t('btnOpen', settings.lang) }}
-        </button>
-        <button class="btn btn-primary" :disabled="!hasFile" @click="emit('export-pdf')">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M3 8h10"/><path d="M9 4l4 4-4 4"/></svg>
-          {{ t('btnPreviewPdf', settings.lang) }}
         </button>
         <div class="relative export-menu">
           <button class="btn" :disabled="!hasFile" @click.stop="toggleExport">
@@ -160,6 +162,8 @@ async function onOpenFile() {
 .btn-ghost { border-color: transparent; color: var(--text-muted); }
 .btn-ghost:hover { color: var(--text); }
 .btn-icon { width: 32px; padding: 0; justify-content: center; }
+.btn-active { background: var(--amber); border-color: var(--amber); color: #fff; }
+.btn-active:hover { background: var(--amber-hover); border-color: var(--amber-hover); }
 .dropdown-item {
   display: flex;
   align-items: center;

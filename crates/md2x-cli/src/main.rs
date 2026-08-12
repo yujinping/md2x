@@ -19,6 +19,10 @@ struct Cli {
     /// Open the generated PDF with the default application (only for pdf)
     #[arg(long)]
     preview: bool,
+
+    /// Render at full width: content spans ~98% of the screen instead of a fixed 860px column
+    #[arg(long)]
+    full_width: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -63,7 +67,7 @@ fn run() -> Result<(), error::MpeError> {
         .unwrap_or("Untitled");
 
     // 渲染完整 HTML
-    let full_html = template::render_html_template_with_metadata(&html_body, title, metadata.as_ref());
+    let full_html = template::render_html_template_with_metadata(&html_body, title, metadata.as_ref(), cli.full_width);
 
     // 按输出格式分发：HTML 直接写出，PDF / PNG 先渲染到临时 HTML 再交给 Chrome
     match cli.format {

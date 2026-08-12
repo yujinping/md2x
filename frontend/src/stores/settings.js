@@ -4,10 +4,12 @@ import { invoke } from '@tauri-apps/api/core'
 
 const LS_THEME = 'mpe-theme'
 const LS_LANG = 'mpe-lang'
+const LS_FULL_WIDTH = 'mpe-full-width'
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref(localStorage.getItem(LS_THEME) || 'dark')
   const lang = ref(localStorage.getItem(LS_LANG) || 'zh-CN')
+  const fullWidth = ref(localStorage.getItem(LS_FULL_WIDTH) === '1')
 
   function applyTheme(val) {
     document.documentElement.classList.toggle('light', val === 'light')
@@ -33,5 +35,10 @@ export const useSettingsStore = defineStore('settings', () => {
   applyTheme(theme.value)
   applyLang(lang.value)
 
-  return { theme, lang, setTheme, setLang }
+  function setFullWidth(val) {
+    fullWidth.value = val
+    localStorage.setItem(LS_FULL_WIDTH, val ? '1' : '0')
+  }
+
+  return { theme, lang, fullWidth, setTheme, setLang, setFullWidth }
 })

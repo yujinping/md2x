@@ -9,6 +9,12 @@
   <style>{{ATOM_ONE_DARK_CSS}}</style>
   <script>{{HIGHLIGHT_JS}}</script>
   <style>
+    /* 宽度变量：默认固定宽度；全宽模式由渲染时注入的覆盖样式替换 */
+    :root {
+      --layout-max-width: 1200px;
+      --content-max-width: 860px;
+    }
+    {{WIDTH_VARS}}
     /* ========== 基础重置与字体 ========== */
     * {
       box-sizing: border-box;
@@ -29,7 +35,7 @@
     /* ========== 布局：侧边栏 + 主内容 ========== */
     .layout {
       display: flex;
-      max-width: 1200px;
+      max-width: var(--layout-max-width);
       margin: 0 auto;
       min-height: 100vh;
       position: relative;
@@ -76,7 +82,8 @@
       overflow: hidden;
       pointer-events: none;
     }
-    .sidebar.collapsed + .main-content {
+    /* 收起时释放正文左侧 260px（通过 body.sidebar-collapsed 命中，避免相邻兄弟选择器失效） */
+    body.sidebar-collapsed .main-content {
       margin-left: 0 !important;
     }
 
@@ -200,7 +207,7 @@
       min-height: 100vh;
     }
     .markdown-body {
-      max-width: 860px;
+      max-width: var(--content-max-width);
       margin: 0 auto;
       font-size: 15px;
       line-height: 1.75;

@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 #[allow(dead_code)]
 pub fn render_html_template(html_body: &str, title: &str) -> String {
-    render_html_template_with_metadata(html_body, title, None)
+    render_html_template_with_metadata(html_body, title, None, false)
 }
 
 pub fn render_html_template_with_metadata(
     html_body: &str,
     title: &str,
     metadata: Option<&HashMap<String, String>>,
+    full_width: bool,
 ) -> String {
     let template = include_str!("../../../templates/mpe.html");
     let github_css = include_str!("../../../templates/assets/github-markdown.min.css");
@@ -20,6 +21,33 @@ pub fn render_html_template_with_metadata(
         .map(render_skill_metadata_html)
         .unwrap_or_default();
 
+    // 全宽模式：放开布局与正文的最大宽度，并隐藏侧栏、归零其占用的空间，
+    // 让正文真正占满整屏（100% 撑满 + 小内边距，绝不用 vw 以免 iframe 视口差异）。
+    // 仅全宽时注入；{{WIDTH_VARS}} 平时为空。
+    let width_vars = if full_width {
+        ":root {\
+\n  --layout-max-width: none !important;\
+\n  --content-max-width: 100% !important;\
+\n}\
+\n/* 全宽：隐藏侧栏并让正文占满整屏宽度 */\
+\n.sidebar,\
+\n.sidebar-resizer,\
+\n.sidebar-toggle { display: none !important; }\
+\n.layout {\
+\n  max-width: none !important;\
+\n}\
+\n.main-content {\
+\n  margin-left: 0 !important;\
+\n  padding-left: 24px !important;\
+\n  padding-right: 24px !important;\
+\n}\
+\n.markdown-body {\
+\n  max-width: 100% !important;\
+\n}"
+    } else {
+        ""
+    };
+
     template
         .replace("{{TITLE}}", title)
         .replace("{{GITHUB_MD_CSS}}", github_css)
@@ -27,6 +55,7 @@ pub fn render_html_template_with_metadata(
         .replace("{{HIGHLIGHT_JS}}", highlight_js)
         .replace("{{TOC}}", &toc_html)
         .replace("{{SKILL_METADATA}}", &metadata_html)
+        .replace("{{WIDTH_VARS}}", width_vars)
         .replace("{{BODY}}", &body_fixed)
 }
 

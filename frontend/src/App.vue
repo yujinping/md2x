@@ -81,7 +81,7 @@ async function goForward() {
 async function loadPreview() {
   let tmp
   try {
-    tmp = await invoke('get_html')
+    tmp = await invoke('get_html', { fullWidth: settings.fullWidth })
   } catch (e) {
     setStatus(e.toString(), 'error')
     return
@@ -193,7 +193,7 @@ async function onExportPdf() {
 
   setStatus('statusGeneratingPdf', 'busy')
   try {
-    const r = await invoke('preview_pdf')
+    const r = await invoke('preview_pdf', { fullWidth: settings.fullWidth })
     previewState.value = r
     showPdfViewer(r)
     setStatus('statusPdfReady', 'ready')
@@ -245,11 +245,22 @@ async function onExportDoc(format) {
     })
     if (!d) return
     setStatus('statusExporting', 'busy')
-    await invoke('export_' + format, { dst: d })
+    if (format === 'docx') {
+      await invoke('export_docx', { dst: d })
+    } else {
+      await invoke('export_' + format, { dst: d, fullWidth: settings.fullWidth })
+    }
     setStatus('statusExportReady', 'ready')
   } catch (err) {
     setStatus(err.toString(), 'error')
   }
+}
+
+function toggleFullWidth() {
+  settings.setFullWidth(!settings.fullWidth)
+  // 重新渲染预览以应用新的宽度模式（PDF 视图则切回 HTML 预览）
+  if (isPdfView.value) isPdfView.value = false
+  loadPreview()
 }
 
 function showHtmlPreview() {
@@ -352,6 +363,7 @@ async function onOpenFile() {
       @export-doc="onExportDoc"
       @nav-back="goBack"
       @nav-forward="goForward"
+      @toggle-full-width="toggleFullWidth"
     />
 
     <main

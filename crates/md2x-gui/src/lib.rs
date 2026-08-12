@@ -17,6 +17,8 @@ struct CachedPreview {
     pdf_path: PathBuf,
     /// 缓存的 HTML 文件路径
     html_path: PathBuf,
+    /// 生成时的全宽开关，用于缓存命中判定
+    full_width: bool,
 }
 
 struct AppState {
@@ -182,7 +184,7 @@ pub fn run() {
 }
 
 /// CLI 模式：静默生成 PDF
-pub fn generate_pdf_from_file(path: &Path) -> Result<PathBuf, MpeError> {
+pub fn generate_pdf_from_file(path: &Path, full_width: bool) -> Result<PathBuf, MpeError> {
     let md = std::fs::read_to_string(path)?;
     let is_skill = path
         .file_name()
@@ -200,7 +202,7 @@ pub fn generate_pdf_from_file(path: &Path) -> Result<PathBuf, MpeError> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
-    let f = template::render_html_template_with_metadata(&h, t, metadata.as_ref());
+    let f = template::render_html_template_with_metadata(&h, t, metadata.as_ref(), full_width);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d)?;
@@ -363,7 +365,7 @@ fn check_file_changed(s: State<AppState>) -> Result<bool, String> {
 /// 生成 HTML 预览（写入临时文件，返回路径）
 /// 如果缓存命中且文件未变更，直接返回缓存的 HTML 路径
 #[tauri::command]
-fn get_html(s: State<AppState>) -> Result<String, String> {
+fn get_html(full_width: bool, s: State<AppState>) -> Result<String, String> {
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -382,7 +384,7 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
     if let Some(ref mtime) = current_mtime {
         let cache = s.cached_preview.lock().map_err(|e| e.to_string())?;
         if let Some(ref cached) = *cache {
-            if cached.file_mtime == *mtime && cached.html_path.exists() {
+            if cached.file_mtime == *mtime && cached.full_width == full_width && cached.html_path.exists() {
                 return Ok(cached.html_path.to_string_lossy().to_string());
             }
         }
@@ -406,7 +408,7 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
-    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref());
+    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -421,12 +423,14 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
                 existing.html_path = hp.clone();
                 existing.pdf_path = PathBuf::new(); // 清除 PDF 缓存，强制重新生成
                 existing.file_mtime = mtime;
+                existing.full_width = full_width;
             }
             None => {
                 *cache = Some(CachedPreview {
                     file_mtime: mtime,
                     pdf_path: PathBuf::new(), // 尚无 PDF
                     html_path: hp.clone(),
+                    full_width,
                 });
             }
         }
@@ -438,7 +442,7 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
 /// 生成 PDF（通过 Chrome headless）并返回 base64 + 临时路径
 /// 如果缓存命中且文件未变更，直接返回缓存的 PDF（不重新生成）
 #[tauri::command]
-fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
+fn preview_pdf(full_width: bool, s: State<AppState>) -> Result<PreviewResult, String> {
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -458,7 +462,7 @@ fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
     {
         let cache = s.cached_preview.lock().map_err(|e| e.to_string())?;
         if let Some(ref cached) = *cache {
-            if cached.file_mtime == current_mtime && cached.pdf_path.exists() {
+            if cached.file_mtime == current_mtime && cached.full_width == full_width && cached.pdf_path.exists() {
                 let pd = std::fs::read(&cached.pdf_path)
                     .map_err(|e| format!("读 PDF 失败: {}", e))?;
                 return Ok(PreviewResult {
@@ -488,7 +492,7 @@ fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
-    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref());
+    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -509,6 +513,7 @@ fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
             file_mtime: current_mtime,
             pdf_path: pp.clone(),
             html_path: hp,
+            full_width,
         });
     }
 
@@ -528,7 +533,7 @@ fn save_pdf_as(src: String, dst: String) -> Result<(), String> {
 }
 
 /// 渲染完整 HTML（含模板、图片内嵌、SKILL 元数据），供导出命令复用。
-fn render_full_html(p: &Path) -> Result<String, String> {
+fn render_full_html(p: &Path, full_width: bool) -> Result<String, String> {
     let md = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
     let is_skill = p
         .file_name()
@@ -546,33 +551,33 @@ fn render_full_html(p: &Path) -> Result<String, String> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
-    Ok(template::render_html_template_with_metadata(&hb, t, metadata.as_ref()))
+    Ok(template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width))
 }
 
 /// 导出 HTML 到用户指定位置
 #[tauri::command]
-fn export_html(dst: String, s: State<AppState>) -> Result<(), String> {
+fn export_html(dst: String, full_width: bool, s: State<AppState>) -> Result<(), String> {
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p)?;
+    let html = render_full_html(&p, full_width)?;
     std::fs::write(&dst, html).map_err(|e| format!("导出失败: {e}"))?;
     Ok(())
 }
 
 /// 导出 PDF 到用户指定位置
 #[tauri::command]
-fn export_pdf(dst: String, s: State<AppState>) -> Result<(), String> {
+fn export_pdf(dst: String, full_width: bool, s: State<AppState>) -> Result<(), String> {
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p)?;
+    let html = render_full_html(&p, full_width)?;
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let hp = d.join("export-tmp.html");
