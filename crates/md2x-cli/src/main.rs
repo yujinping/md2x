@@ -52,8 +52,8 @@ fn run() -> Result<(), error::MpeError> {
         (None, &markdown[..])
     };
 
-    // 转换为 HTML
-    let html_body = converter::convert_markdown_to_html(body_md)?;
+    // 转换为 HTML（含 mermaid 图表一次性烘焙为内嵌 SVG）
+    let html_body = converter::convert_markdown_to_html_with_mermaid(body_md)?;
     let html_body = converter::resolve_image_srcs(&html_body, path);
 
     // 生成标题

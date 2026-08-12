@@ -194,7 +194,7 @@ pub fn generate_pdf_from_file(path: &Path) -> Result<PathBuf, MpeError> {
     } else {
         (None, &md[..])
     };
-    let h = converter::convert_markdown_to_html(body_md)?;
+    let h = converter::convert_markdown_to_html_with_mermaid(body_md)?;
     let h = converter::resolve_image_srcs(&h, path);
     let t = path
         .file_stem()
@@ -400,7 +400,7 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html(body_md).map_err(|e| e.to_string())?;
+    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
     let t = p
         .file_stem()
@@ -482,7 +482,7 @@ fn preview_pdf(s: State<AppState>) -> Result<PreviewResult, String> {
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html(body_md).map_err(|e| e.to_string())?;
+    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
     let t = p
         .file_stem()
@@ -540,7 +540,7 @@ fn render_full_html(p: &Path) -> Result<String, String> {
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html(body_md).map_err(|e| e.to_string())?;
+    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, p);
     let t = p
         .file_stem()

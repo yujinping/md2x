@@ -24,6 +24,13 @@ pub fn convert_markdown_to_html(markdown: &str) -> Result<String, MpeError> {
     Ok(stripped)
 }
 
+/// 转换 Markdown → HTML，并一次性把 mermaid / flowchart 等图表渲染为内嵌 SVG。
+/// 供 CLI 与 GUI 的统一入口使用；渲染失败会自动降级为原始代码块，不影响整体转换。
+pub fn convert_markdown_to_html_with_mermaid(markdown: &str) -> Result<String, MpeError> {
+    let h = convert_markdown_to_html(markdown)?;
+    Ok(crate::mermaid::render_mermaid_blocks(&h))
+}
+
 /// 修复含空格的链接/图片目标，使其能被 CommonMark 正确解析为链接。
 ///
 /// CommonMark 中，形如 `[text](url)` 的裸链接目标不能包含空格，否则整段会被当作

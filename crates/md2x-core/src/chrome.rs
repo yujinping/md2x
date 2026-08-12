@@ -34,7 +34,7 @@ const CHROME_CANDIDATES: &[&str] = &[
     "/usr/bin/microsoft-edge-stable",
 ];
 
-fn find_chrome() -> Result<String, MpeError> {
+pub(crate) fn find_chrome() -> Result<String, MpeError> {
     for candidate in CHROME_CANDIDATES {
         if Path::new(candidate).exists() {
             return Ok(candidate.to_string());
@@ -62,6 +62,9 @@ pub fn generate_pdf(html_path: &str, pdf_path: &str) -> Result<(), MpeError> {
     let output = Command::new(&chrome)
         .args([
             "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
             "--no-pdf-header-footer",
             "--print-to-pdf-background",
             &format!("--print-to-pdf={}", pdf_path),
@@ -85,7 +88,11 @@ pub fn generate_png(html_path: &str, png_path: &str) -> Result<(), MpeError> {
     let output = Command::new(&chrome)
         .args([
             "--headless=new",
+            "--no-sandbox",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
             "--hide-scrollbars",
+            "--force-device-scale-factor=2",
             "--window-size=1920,1080",
             &format!("--screenshot={}", png_path),
             &format!("file://{}", abs_html.display()),

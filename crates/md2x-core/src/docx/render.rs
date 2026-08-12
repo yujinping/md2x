@@ -5,6 +5,7 @@ use comrak::nodes::{AstNode, ListType, NodeValue, TableAlignment};
 use std::path::{Path, PathBuf};
 
 use super::{highlight, image, package::rfonts_xml};
+use crate::mermaid;
 
 /// 渲染上下文：统一分配 document.xml.rels 的 rId（rId1=styles、rId2=numbering，之后按文档顺序）。
 #[derive(Default)]
@@ -99,12 +100,20 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
             render_list(node, 0, false, out, ctx);
         }
         NodeValue::CodeBlock(cb) => {
-            let lang = if cb.info.trim().is_empty() {
-                None
+            let lang = cb.info.trim();
+            // mermaid / flowchart 等图表：直接渲染为 SVG 矢量图内嵌；失败则保留代码块
+            if mermaid::is_mermaid_source(lang, &cb.literal) {
+                match mermaid::render_mermaid_svg_from(lang, &cb.literal) {
+                    Some(svg) => out.push_str(&render_mermaid_drawing(svg.as_bytes(), ctx)),
+                    None => {
+                        let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                        render_code_block(lang_opt, &cb.literal, out);
+                    }
+                }
             } else {
-                Some(cb.info.trim())
-            };
-            render_code_block(lang, &cb.literal, out);
+                let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                render_code_block(lang_opt, &cb.literal, out);
+            }
         }
         NodeValue::BlockQuote => {
             for child in node.children() {
@@ -226,6 +235,43 @@ fn render_image<'a>(node: &'a AstNode<'a>, ctx: &mut RenderCtx) -> String {
     )
 }
 
+/// 把已渲染好的 mermaid SVG 字节作为居中矢量图段落内嵌（现代 Word 直接支持 SVG）。
+fn render_mermaid_drawing(svg: &[u8], ctx: &mut RenderCtx) -> String {
+    let mime = "image/svg+xml";
+    let (w, h) = image::image_dimensions(svg, mime).unwrap_or((800, 600));
+    // 像素 → EMU（96dpi：1px = 9525 EMU），超宽等比缩放
+    let max_cx = 5_760_720u64;
+    let mut cx = w as u64 * 9525;
+    let mut cy = h as u64 * 9525;
+    if cx > max_cx {
+        cy = cy * max_cx / cx;
+        cx = max_cx;
+    }
+
+    let rid = ctx.next_rid;
+    ctx.next_rid += 1;
+    let did = ctx.next_drawing_id;
+    ctx.next_drawing_id += 1;
+    let name = format!("image{rid}.svg");
+    ctx.media.push((name.clone(), svg.to_vec(), mime.to_string(), rid));
+
+    format!(
+        "<w:p><w:pPr><w:jc w:val=\"center\"/>\
+         <w:spacing w:line=\"350\" w:lineRule=\"auto\" w:after=\"240\"/></w:pPr>\
+         <w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">\
+         <wp:extent cx=\"{cx}\" cy=\"{cy}\"/>\
+         <wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>\
+         <wp:docPr id=\"{did}\" name=\"{name}\"/>\
+         <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect=\"1\"/></wp:cNvGraphicFramePr>\
+         <a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+         <pic:pic><pic:nvPicPr><pic:cNvPr id=\"{did}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+         <pic:blipFill><a:blip r:embed=\"rId{rid}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+         <pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr>\
+         </pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+    )
+}
+
 /// 表格：全宽、单线边框、表头底纹、按列对齐。
 fn render_table<'a>(
     alignments: Vec<TableAlignment>,
@@ -320,12 +366,20 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
         }
         NodeValue::List(_) => render_list(node, 0, true, out, ctx),
         NodeValue::CodeBlock(cb) => {
-            let lang = if cb.info.trim().is_empty() {
-                None
+            let lang = cb.info.trim();
+            // mermaid / flowchart 等图表：直接渲染为 SVG 矢量图内嵌；失败则保留代码块
+            if mermaid::is_mermaid_source(lang, &cb.literal) {
+                match mermaid::render_mermaid_svg_from(lang, &cb.literal) {
+                    Some(svg) => out.push_str(&render_mermaid_drawing(svg.as_bytes(), ctx)),
+                    None => {
+                        let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                        render_code_block(lang_opt, &cb.literal, out);
+                    }
+                }
             } else {
-                Some(cb.info.trim())
-            };
-            render_code_block(lang, &cb.literal, out);
+                let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                render_code_block(lang_opt, &cb.literal, out);
+            }
         }
         NodeValue::BlockQuote => {
             for child in node.children() {
