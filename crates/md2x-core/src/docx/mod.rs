@@ -248,6 +248,28 @@ mod tests {
     }
 
     #[test]
+    fn spaced_link_renders_as_hyperlink() {
+        // 复现用户场景：文件名含空格的链接应渲染为真正的超链接
+        let content = super::markdown_to_docx_content(
+            "[09-Kotlin 重构决策与风险.md](09-Kotlin 重构决策与风险.md)",
+            Path::new("t.md"),
+        )
+        .unwrap();
+        assert!(
+            content.document_xml.contains("w:hyperlink"),
+            "含空格链接应渲染为超链接"
+        );
+        // 真实目标 URL 收集在 links 中（写入 .rels），而非 document.xml 本体
+        assert!(
+            content
+                .links
+                .iter()
+                .any(|(_, url)| url.contains("09-Kotlin 重构决策与风险.md")),
+            "超链接目标应保留含空格的 Kotlin 文件名"
+        );
+    }
+
+    #[test]
     fn svg_image_embeds_with_dimensions() {
         let dir = std::env::temp_dir().join("md2x-docx-svg");
         std::fs::create_dir_all(&dir).unwrap();

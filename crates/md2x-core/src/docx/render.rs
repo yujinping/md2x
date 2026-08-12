@@ -45,8 +45,10 @@ pub fn render_body(
     options.parse.smart = true;
     options.render.hardbreaks = true;
 
+    // 修复含空格的链接目标，使其能被 comrak 解析为真正的链接
+    let md = crate::converter::fix_spaced_link_destinations(md);
     let arena = comrak::Arena::new();
-    let root = comrak::parse_document(&arena, md, &options);
+    let root = comrak::parse_document(&arena, &md, &options);
     let mut ctx = RenderCtx {
         next_rid: 3,
         next_drawing_id: 1,

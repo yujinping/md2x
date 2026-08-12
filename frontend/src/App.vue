@@ -18,6 +18,8 @@ const statusText = ref('')
 const statusType = ref('')
 const isPdfView = ref(false)
 const isGeneratingPdf = ref(false)
+// 当前打开文件的完整路径，用于把相对链接解析为绝对路径
+const currentPath = ref('')
 
 function setStatus(msg, type) {
   statusText.value = t(msg, settings.lang)
@@ -25,6 +27,7 @@ function setStatus(msg, type) {
 }
 
 async function openMdFile(path) {
+  currentPath.value = path
   previewState.value = null
   setStatus('statusGenerating', 'busy')
   try {
@@ -61,7 +64,7 @@ async function loadPreview() {
     setStatus(e.toString(), 'error')
     return
   }
-  previewState.value = html
+  previewState.value = injectLinkHandler(html)
 
   try {
     const n = await invoke('get_file_name')
@@ -69,6 +72,62 @@ async function loadPreview() {
   } catch (_) {}
 
   setStatus('statusPreviewReady', 'ready')
+}
+
+/// 向内嵌预览 HTML 注入点击拦截脚本：
+/// 点击指向 .md 的内部链接时，阻止 iframe 自行跳转（否则会嵌套空页面），
+/// 改为通知父窗口在应用内打开对应文件。
+function injectLinkHandler(html) {
+  const open = '<' + 'script>'
+  const close = '<' + '/script>'
+  const code = `
+(function () {
+  document.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a') : null;
+    if (!a) return;
+    var href = a.getAttribute && a.getAttribute('href');
+    if (!href) return;
+    // 仅拦截指向 .md 的内部链接（相对路径或 file://），锚点与外链放行
+    if (/\\.md([?#]|$)/i.test(href)) {
+      e.preventDefault();
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'md2x-link', href: href }, '*');
+      }
+    }
+  }, true);
+})();
+`
+  const script = open + code + close
+  if (html.indexOf('</body>') !== -1) {
+    return html.replace('</body>', script + '</body>')
+  }
+  return html + script
+}
+
+/// 处理 iframe 转发来的内部链接点击：解析为绝对路径并在应用内打开
+function resolveAndOpen(href) {
+  let target
+  if (href.startsWith('file://')) {
+    target = decodeURIComponent(href.replace(/^file:\/\//, ''))
+    if (!target.startsWith('/') && !target.startsWith('//')) target = '/' + target
+  } else {
+    // 相对路径：以当前打开文件所在目录为基准解析（支持 ./ ../ 与 %20 等编码）
+    const dir = currentPath.value.replace(/\/[^/]*$/, '')
+    const base = 'file://' + (dir.startsWith('/') ? '' : '/') + dir + '/'
+    try {
+      target = new URL(href, base).pathname
+    } catch (err) {
+      return
+    }
+  }
+  if (!target || !/\.md$/i.test(target)) return
+  openMdFile(target)
+}
+
+function onIframeMessage(e) {
+  const data = e.data
+  if (!data || data.type !== 'md2x-link') return
+  resolveAndOpen(data.href)
 }
 
 async function onExportPdf() {
@@ -180,7 +239,10 @@ onMounted(() => {
       if (await invoke('check_show_settings')) showSettings.value = true
     } catch (_) {}
   }, 500)
+  // 监听内嵌预览页转发来的内部链接点击
+  window.addEventListener('message', onIframeMessage)
   // Initial file check
+  invoke('get_file_path').then(p => { if (p) currentPath.value = p }).catch(() => {})
   invoke('get_file_name').then(n => {
     if (n) { fileName.value = n; loadPreview() }
   }).catch(() => {})
@@ -212,6 +274,7 @@ async function onOpenFile() {
       }
     })
     if (!p) return
+    currentPath.value = p
     await invoke('set_file', { path: p })
   } catch (e) {
     setStatus(e.toString(), 'error')

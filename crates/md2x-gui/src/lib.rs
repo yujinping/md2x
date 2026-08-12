@@ -142,6 +142,7 @@ pub fn run() {
             export_pdf,
             export_docx,
             get_file_name,
+            get_file_path,
             wait_for_drop,
             check_file_changed,
             get_platform,
@@ -604,6 +605,15 @@ fn get_file_name(s: State<AppState>) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())?
         .as_ref()
         .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string())))
+}
+
+/// 获取当前打开文件的完整路径（前端用来解析相对链接的基准目录）
+#[tauri::command]
+fn get_file_path(s: State<AppState>) -> Option<String> {
+    s.current_file
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|p| p.to_string_lossy().to_string()))
 }
 
 // ==================== 工具函数 ====================

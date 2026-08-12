@@ -1,8 +1,10 @@
 use crate::error::MpeError;
 use comrak::ComrakOptions;
+use regex::Regex;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub fn convert_markdown_to_html(markdown: &str) -> Result<String, MpeError> {
     let mut options = ComrakOptions::default();
@@ -14,9 +16,103 @@ pub fn convert_markdown_to_html(markdown: &str) -> Result<String, MpeError> {
     options.render.hardbreaks = true;
 
     let body = strip_front_matter(markdown);
+    // 修复含空格的链接目标：CommonMark 规定括号内裸链接目标不能含空格，
+    // 否则 comrak 不会将其解析为链接。此处自动用 <> 包裹含空格且未包裹的目标。
+    let body = fix_spaced_link_destinations(body);
     let html = comrak::markdown_to_html(&body, &options);
     let stripped = strip_p_in_task_lists(&html);
     Ok(stripped)
+}
+
+/// 修复含空格的链接/图片目标，使其能被 CommonMark 正确解析为链接。
+///
+/// CommonMark 中，形如 `[text](url)` 的裸链接目标不能包含空格，否则整段会被当作
+/// 普通文本。合法写法是用尖括号包裹：`[text](<url with space>)`。本函数在目标
+/// 含空格且尚未用 `<>` 包裹时自动加上 `<>`，从而让 comrak 渲染出真正的链接。
+///
+/// 处理规则：
+/// - 跳过围栏代码块（```），避免改动代码中的字面文本；
+/// - 跳过行内代码（`...`），避免误改字面文本；
+/// - 已用 `<>` 包裹的目标保持不变；
+/// - 含空格的目标自动包裹为 `<...>`；
+/// - 支持可选的链接标题（"title" / 'title' / (title)）。
+pub(crate) fn fix_spaced_link_destinations(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut in_fence = false;
+    // split_inclusive 保留每行的换行符，从而精确保留原始换行结构
+    for chunk in markdown.split_inclusive('\n') {
+        let (line, nl) = match chunk.strip_suffix('\n') {
+            Some(l) => (l, "\n"),
+            None => (chunk, ""),
+        };
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            out.push_str(line);
+            out.push_str(nl);
+            continue;
+        }
+        if in_fence {
+            out.push_str(line);
+            out.push_str(nl);
+            continue;
+        }
+        out.push_str(&fix_links_in_line(line));
+        out.push_str(nl);
+    }
+    out
+}
+
+/// 对单行应用链接目标修复，跳过行内代码段。
+fn fix_links_in_line(line: &str) -> String {
+    let link_re = link_dest_regex();
+    let code_re = inline_code_regex();
+    let mut out = String::with_capacity(line.len());
+    let mut last = 0;
+    for m in code_re.find_iter(line) {
+        // 先在代码段之前的非代码文本上应用修复
+        let before = &line[last..m.start()];
+        out.push_str(&link_re.replace_all(before, replace_link));
+        // 行内代码原样保留
+        out.push_str(m.as_str());
+        last = m.end();
+    }
+    let after = &line[last..];
+    out.push_str(&link_re.replace_all(after, replace_link));
+    out
+}
+
+/// 匹配内联链接/图片的整体结构，捕获 label、dest（目标）与可选 title（标题）。
+fn link_dest_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            "(?P<label>!?\\[[^\\]]*\\])\\((?P<dest>[^)]*?)(?P<title>(?:\\s+\"[^\"]*\")?(?:\\s+'[^']*')?(?:\\s+\\([^)]*\\))?)\\)",
+        )
+        .unwrap()
+    })
+}
+
+/// 匹配行内代码段 `code`（单反引号）。
+fn inline_code_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new("`[^`\n]*`").unwrap())
+}
+
+/// 将单个匹配重写成合法链接：必要时用 <> 包裹含空格的目标。
+fn replace_link(caps: &regex::Captures) -> String {
+    let label = &caps["label"];
+    let dest = caps.name("dest").map(|m| m.as_str()).unwrap_or("");
+    let title = caps.name("title").map(|m| m.as_str()).unwrap_or("");
+    if dest.starts_with('<') {
+        // 已用 <> 包裹，保持原样
+        format!("{}({}{})", label, dest, title)
+    } else if dest.chars().any(|c| c.is_whitespace()) {
+        // 含空格，自动包裹
+        format!("{}(<{}>{})", label, dest, title)
+    } else {
+        format!("{}({}{})", label, dest, title)
+    }
 }
 
 /// 解析 HTML 中的图片路径，转为 base64 data URI。
@@ -429,5 +525,69 @@ mod tests {
 
         // 清理
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_fix_spaced_link_destinations() {
+        // 含空格的链接目标应被 <> 包裹
+        assert_eq!(
+            fix_spaced_link_destinations("[a](file with space.md)"),
+            "[a](<file with space.md>)"
+        );
+        // 不含空格的链接不改动
+        let plain = "[b](normal.md)";
+        assert_eq!(fix_spaced_link_destinations(plain), plain);
+        // 已用 <> 包裹的不重复包裹
+        let wrapped = "[c](<already wrapped.md>)";
+        assert_eq!(fix_spaced_link_destinations(wrapped), wrapped);
+        // 图片链接同样处理
+        assert_eq!(
+            fix_spaced_link_destinations("![img](path with space.png)"),
+            "![img](<path with space.png>)"
+        );
+        // 含空格且带标题的链接，仅包裹目标
+        assert_eq!(
+            fix_spaced_link_destinations("[d](url with space \"标题\")"),
+            "[d](<url with space> \"标题\")"
+        );
+        // 表格中的链接
+        let table = "| [08-x.md](08-x.md) | [09-y z.md](09-y z.md) |";
+        let out = fix_spaced_link_destinations(table);
+        assert!(out.contains("[08-x.md](08-x.md)"), "无空格链接不变");
+        assert!(
+            out.contains("[09-y z.md](<09-y z.md>)"),
+            "表格中含空格链接应被包裹"
+        );
+    }
+
+    #[test]
+    fn test_fix_spaced_link_skips_code() {
+        // 围栏代码块中的字面文本不应被改动
+        let md = "```\n[code](a b.md)\n```\n[real](a b.md)";
+        let out = fix_spaced_link_destinations(md);
+        assert!(out.contains("```\n[code](a b.md)\n```"), "代码块内容不变");
+        assert!(out.contains("[real](<a b.md>)"), "代码块外链接应修复");
+
+        // 行内代码中的字面文本不应被改动
+        let inline = "见 `[x](a b)` 与 [y](a b.md)";
+        let out = fix_spaced_link_destinations(inline);
+        assert!(out.contains("`[x](a b)`"), "行内代码不变");
+        assert!(out.contains("[y](<a b.md>)"), "行内代码外链接应修复");
+    }
+
+    #[test]
+    fn test_spaced_link_renders_as_anchor() {
+        // 复现用户报告的场景：文件名含空格的链接应渲染为真正的 <a>
+        let md = "| [08-新仓库重建与追溯规范.md](08-新仓库重建与追溯规范.md) | \
+                  [09-Kotlin 重构决策与风险.md](09-Kotlin 重构决策与风险.md) |";
+        let html = convert_markdown_to_html(md).unwrap();
+        assert!(html.contains("<a "), "含空格链接应渲染为 <a> 标签");
+        assert!(
+            html.contains("09-Kotlin"),
+            "链接文本/目标应保留 Kotlin 文件名"
+        );
+        // 两个链接都应存在
+        let anchor_count = html.matches("<a ").count();
+        assert!(anchor_count >= 2, "应至少渲染出两个链接，实际：{anchor_count}");
     }
 }
