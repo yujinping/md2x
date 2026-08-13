@@ -1,6 +1,6 @@
 [package]
 name = "md2x-cli"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "md2x CLI tool - Convert Markdown files to PDF"
 

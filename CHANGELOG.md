@@ -1,4 +1,4 @@
-## [unreleased]
+## [0.4.0] - 2026-08-13
 
 ### 🚀 Features
 
@@ -7,6 +7,10 @@
 ### 🐛 Bug Fixes
 
 - *(fullwidth)* 修复全宽切换无效并改为前端注入样式
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.4.0
 ## [0.3.1] - 2026-08-12
 
 ### 🚀 Features
