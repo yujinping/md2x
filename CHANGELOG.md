@@ -2,6 +2,15 @@
 
 ### 🚀 Features
 
+- *(render)* 支持 HTML 全宽显示并修复侧栏收起占位
+
+### 🐛 Bug Fixes
+
+- *(fullwidth)* 修复全宽切换无效并改为前端注入样式
+## [0.3.1] - 2026-08-12
+
+### 🚀 Features
+
 - *(frontend)* 新增前进后退导航并修复相对链接空白
 - *(mermaid)* 将 Mermaid 图表渲染为内嵌 SVG
 
@@ -13,6 +22,7 @@
 
 - *(ci)* 升级 Actions 依赖与 pnpm 版本
 - *(release)* 升级版本至 0.3.0
+- Release v0.3.1
 ## [0.2.0] - 2026-08-08
 
 ### 🚀 Features
