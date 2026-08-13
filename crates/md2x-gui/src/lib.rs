@@ -365,7 +365,9 @@ fn check_file_changed(s: State<AppState>) -> Result<bool, String> {
 /// 生成 HTML 预览（写入临时文件，返回路径）
 /// 如果缓存命中且文件未变更，直接返回缓存的 HTML 路径
 #[tauri::command]
-fn get_html(full_width: bool, s: State<AppState>) -> Result<String, String> {
+fn get_html(s: State<AppState>) -> Result<String, String> {
+    // 全宽由前端在拿到 HTML 后注入 CSS 实现，后端始终渲染标准宽度
+    let full_width = false;
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -441,8 +443,9 @@ fn get_html(full_width: bool, s: State<AppState>) -> Result<String, String> {
 
 /// 生成 PDF（通过 Chrome headless）并返回 base64 + 临时路径
 /// 如果缓存命中且文件未变更，直接返回缓存的 PDF（不重新生成）
-#[tauri::command]
-fn preview_pdf(full_width: bool, s: State<AppState>) -> Result<PreviewResult, String> {
+#[tauri::command(rename_all = "camelCase")]
+fn preview_pdf(full_width: Option<bool>, s: State<AppState>) -> Result<PreviewResult, String> {
+    let full_width = full_width.unwrap_or(false);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -555,8 +558,9 @@ fn render_full_html(p: &Path, full_width: bool) -> Result<String, String> {
 }
 
 /// 导出 HTML 到用户指定位置
-#[tauri::command]
-fn export_html(dst: String, full_width: bool, s: State<AppState>) -> Result<(), String> {
+#[tauri::command(rename_all = "camelCase")]
+fn export_html(dst: String, full_width: Option<bool>, s: State<AppState>) -> Result<(), String> {
+    let full_width = full_width.unwrap_or(false);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
@@ -569,8 +573,9 @@ fn export_html(dst: String, full_width: bool, s: State<AppState>) -> Result<(), 
 }
 
 /// 导出 PDF 到用户指定位置
-#[tauri::command]
-fn export_pdf(dst: String, full_width: bool, s: State<AppState>) -> Result<(), String> {
+#[tauri::command(rename_all = "camelCase")]
+fn export_pdf(dst: String, full_width: Option<bool>, s: State<AppState>) -> Result<(), String> {
+    let full_width = full_width.unwrap_or(false);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()

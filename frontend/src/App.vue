@@ -81,7 +81,7 @@ async function goForward() {
 async function loadPreview() {
   let tmp
   try {
-    tmp = await invoke('get_html', { fullWidth: settings.fullWidth })
+    tmp = await invoke('get_html')
   } catch (e) {
     setStatus(e.toString(), 'error')
     return
@@ -103,7 +103,7 @@ async function loadPreview() {
     setStatus(e.toString(), 'error')
     return
   }
-  previewState.value = injectLinkHandler(html)
+  previewState.value = injectLinkHandler(applyFullWidth(html))
 
   try {
     const n = await invoke('get_file_name')
@@ -141,6 +141,24 @@ function injectLinkHandler(html) {
     return html.replace('</body>', script + '</body>')
   }
   return html + script
+}
+
+/// 纯前端全宽兜底：当 settings.fullWidth 开启时，直接在 HTML 的 <head> 注入
+/// 全宽 CSS，彻底绕开后端命令参数传递（规避 Tauri v2 参数大小写 / reject 风险）。
+/// 与后端 render 注入的 CSS 完全等价，重复注入无害。
+function applyFullWidth(html) {
+  if (!settings.fullWidth) return html
+  const style = `<style id="md2x-fullwidth">\
+:root{--layout-max-width:none!important;--content-max-width:100%!important}\
+.sidebar,.sidebar-resizer,.sidebar-toggle{display:none!important}\
+.layout{max-width:none!important}\
+.main-content{margin-left:0!important;padding-left:24px!important;padding-right:24px!important}\
+.markdown-body{max-width:100%!important}\
+</style>`
+  if (html.indexOf('</head>') !== -1) {
+    return html.replace('</head>', style + '</head>')
+  }
+  return html + style
 }
 
 /// 处理 iframe 转发来的内部链接点击：解析为绝对路径并在应用内打开

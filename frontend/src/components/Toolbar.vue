@@ -34,7 +34,8 @@ onMounted(() => document.addEventListener('click', onClickOutside))
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 
 function onToggleFullWidth() {
-  settings.setFullWidth(!settings.fullWidth)
+  // 仅转发事件；真正的开关与重新渲染由 App.vue 的 toggleFullWidth 统一处理，
+  // 避免重复取反导致“点了两次等于没点”（点击无效果）。
   emit('toggle-full-width')
 }
 
