@@ -15,18 +15,41 @@ jobs:
           - platform: linux
             os: ubuntu-latest
             cli_artifact: target/release/md2x
+            cli_target: ""
             gui_bundles: deb
             tauri_target: ""
+            dmg_source: ""
+          # macOS 通用版：一个 dmg 同时包含 x64 + arm64
           - platform: macos-universal
             os: macos-latest
             cli_artifact: target/release/md2x
+            cli_target: ""
             gui_bundles: dmg
             tauri_target: --target universal-apple-darwin
+            dmg_source: target/universal-apple-darwin/release/bundle/dmg
+          # macOS Intel (x86_64) 专版 dmg
+          - platform: macos-x64
+            os: macos-latest
+            cli_artifact: target/x86_64-apple-darwin/release/md2x
+            cli_target: x86_64-apple-darwin
+            gui_bundles: dmg
+            tauri_target: --target x86_64-apple-darwin
+            dmg_source: target/x86_64-apple-darwin/release/bundle/dmg
+          # macOS Apple Silicon (arm64) 专版 dmg
+          - platform: macos-arm64
+            os: macos-latest
+            cli_artifact: target/aarch64-apple-darwin/release/md2x
+            cli_target: aarch64-apple-darwin
+            gui_bundles: dmg
+            tauri_target: --target aarch64-apple-darwin
+            dmg_source: target/aarch64-apple-darwin/release/bundle/dmg
           - platform: windows
             os: windows-latest
             cli_artifact: target/release/md2x.exe
+            cli_target: ""
             gui_bundles: nsis
             tauri_target: ""
+            dmg_source: ""
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -34,7 +57,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install macOS targets (universal)
+      # 三种 macOS 变体（universal / x64 / arm64）都需要这两个目标
+      - name: Install macOS targets
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
@@ -54,11 +78,19 @@ jobs:
             libxdo-dev \
             libssl-dev
 
+      # 原生构建：linux / windows，以及 macOS 通用版（通用版后续用 lipo 覆盖）
       - name: Build CLI (release)
+        if: matrix.cli_target == '' && matrix.platform != 'macos-universal'
         run: cargo build --release -p md2x-cli
 
+      # macOS 专版：按矩阵目标架构构建 CLI
+      - name: Build CLI (macOS 单架构)
+        if: runner.os == 'macOS' && matrix.cli_target != ''
+        run: cargo build --release -p md2x-cli --target ${{ matrix.cli_target }}
+
+      # macOS 通用版：分别构建两个架构后 lipo 合并
       - name: Build CLI (universal, macOS)
-        if: runner.os == 'macOS'
+        if: matrix.platform == 'macos-universal'
         run: |
           cargo build --release -p md2x-cli --target aarch64-apple-darwin
           cargo build --release -p md2x-cli --target x86_64-apple-darwin
@@ -66,11 +98,26 @@ jobs:
             target/aarch64-apple-darwin/release/md2x \
             target/x86_64-apple-darwin/release/md2x
 
+      # 以平台区分文件名的形式上传 CLI，避免发布时同名文件互相覆盖
+      - name: Prepare CLI artifact
+        shell: bash
+        env:
+          CLI_ARTIFACT: ${{ matrix.cli_artifact }}
+          PLATFORM: ${{ matrix.platform }}
+          RUNNER_OS: ${{ runner.os }}
+        run: |
+          mkdir -p dist-cli
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$CLI_ARTIFACT" "dist-cli/md2x-$PLATFORM.exe"
+          else
+            cp "$CLI_ARTIFACT" "dist-cli/md2x-$PLATFORM"
+          fi
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v5
         with:
           name: md2x-cli-${{ matrix.platform }}
-          path: ${{ matrix.cli_artifact }}
+          path: dist-cli
 
       - name: Install Node
         uses: actions/setup-node@v5
@@ -95,11 +142,12 @@ jobs:
         working-directory: crates/md2x-gui
         run: cargo tauri build --bundles ${{ matrix.gui_bundles }} ${{ matrix.tauri_target }}
 
+      # 三种 macOS 变体的 dmg 都归拢到统一路径，便于统一上传
       - name: 归拢 macOS dmg
-        if: matrix.platform == 'macos-universal'
+        if: runner.os == 'macOS'
         run: |
           mkdir -p target/release/bundle/dmg
-          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg target/release/bundle/dmg/
+          cp ${{ matrix.dmg_source }}/*.dmg target/release/bundle/dmg/
 
       - name: Upload GUI artifact
         uses: actions/upload-artifact@v5
