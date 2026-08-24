@@ -2,7 +2,13 @@
 
 ### ⚙️ Miscellaneous Tasks
 
+- *(ci)* 新增 macOS 单架构 dmg 构建并优化产物命名
+## [0.2.1] - 2026-08-24
+
+### ⚙️ Miscellaneous Tasks
+
 - *(icons)* 更新应用图标
+- Release v0.2.1
 ## [0.4.1] - 2026-08-13
 
 ### ⚙️ Miscellaneous Tasks
