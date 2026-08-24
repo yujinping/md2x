@@ -1,3 +1,13 @@
+## [unreleased]
+
+### ⚙️ Miscellaneous Tasks
+
+- *(icons)* 更新应用图标
+## [0.4.1] - 2026-08-13
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.4.1
 ## [0.4.0] - 2026-08-13
 
 ### 🚀 Features
