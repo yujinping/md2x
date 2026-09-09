@@ -4,7 +4,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
 
-const emit = defineEmits(['open-file'])
 const settings = useSettingsStore()
 const shortcutMod = ref('⌘')
 const hintHtml = ref('')
@@ -19,6 +18,12 @@ onMounted(async () => {
   shortcutMod.value = isMac ? '⌘' : 'Ctrl'
   hintHtml.value = isMac ? t('hintMac', settings.lang) : t('hintWin', settings.lang)
 })
+
+const kbdStyle = {
+  background: 'var(--kbd-bg)',
+  border: '1px solid var(--action-hint-border)',
+  color: 'var(--text-dim)',
+}
 </script>
 
 <template>
@@ -30,13 +35,31 @@ onMounted(async () => {
     </svg>
 
     <h2 class="text-xl font-semibold mb-2 tracking-tight" :style="{ color: 'var(--welcome-title)' }">{{ t('welcomeTitle', settings.lang) }}</h2>
-    <p class="text-sm leading-relaxed max-w-[340px] mb-6" :style="{ color: 'var(--text-muted)' }">{{ t('welcomeSub', settings.lang) }}</p>
+    <p class="text-sm leading-relaxed max-w-[340px] mb-7" :style="{ color: 'var(--text-muted)' }">{{ t('welcomeSub', settings.lang) }}</p>
 
-    <div class="inline-flex items-center gap-2 px-5 py-2 rounded-lg text-sm" :style="{ background: 'var(--action-hint-bg)', color: 'var(--text-dim)' }">
-      <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="{ background: 'var(--kbd-bg)', border: '1px solid var(--action-hint-border)', color: 'var(--text-dim)' }">{{ shortcutMod }}</kbd>
-      <span class="text-xs font-medium" :style="{ color: 'var(--text-dim)' }">+</span>
-      <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="{ background: 'var(--kbd-bg)', border: '1px solid var(--action-hint-border)', color: 'var(--text-dim)' }">O</kbd>
-      <span>{{ t('dropOrOpen', settings.lang) }}</span>
+    <!-- 打开功能提示：入口在顶部导航区，此处仅作提示说明 -->
+    <div class="flex flex-col items-stretch gap-2.5 w-full max-w-[360px]">
+      <div class="flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs text-left" :style="{ background: 'var(--action-hint-bg)', color: 'var(--text-dim)' }">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 flex-shrink-0" style="color: var(--text-dim)">
+          <path d="M2 5l6-3 6 3v7l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><path d="M8 8v7"/>
+        </svg>
+        <span class="flex-1 min-w-0" :style="{ color: 'var(--text-dim)' }">{{ t('welcomeFileHint', settings.lang) }}</span>
+        <span class="flex items-center gap-1 flex-shrink-0">
+          <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="kbdStyle">{{ shortcutMod }}</kbd>
+          <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="kbdStyle">O</kbd>
+        </span>
+      </div>
+      <div class="flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs text-left" :style="{ background: 'var(--action-hint-bg)', color: 'var(--text-dim)' }">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 flex-shrink-0" style="color: var(--text-dim)">
+          <path d="M1.5 5a1 1 0 0 1 1-1h3.2l1.6 2h5.2a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V5z"/>
+        </svg>
+        <span class="flex-1 min-w-0" :style="{ color: 'var(--text-dim)' }">{{ t('welcomeFolderHint', settings.lang) }}</span>
+        <span class="flex items-center gap-1 flex-shrink-0">
+          <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="kbdStyle">⇧</kbd>
+          <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="kbdStyle">{{ shortcutMod }}</kbd>
+          <kbd class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded font-mono text-xs" :style="kbdStyle">O</kbd>
+        </span>
+      </div>
     </div>
 
     <p class="mt-8 text-xs leading-relaxed max-w-[420px]" :style="{ color: 'var(--text-dim)' }" v-html="hintHtml"></p>

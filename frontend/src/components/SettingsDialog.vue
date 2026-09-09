@@ -1,25 +1,79 @@
 <script setup>
+import { ref, computed, onMounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
 
 const emit = defineEmits(['close'])
 const settings = useSettingsStore()
 
+const platform = ref('')
+const defaultBusy = ref(false)
+const defaultMsg = ref(null) // { ok: boolean, text: string } | null
+
+onMounted(async () => {
+  try {
+    platform.value = await invoke('get_platform')
+  } catch (_) {}
+})
+
+const viewModes = [
+  { value: 'single', labelKey: 'viewSingle', descKey: 'viewSingleDesc' },
+  { value: 'folder', labelKey: 'viewFolder', descKey: 'viewFolderDesc' },
+  { value: 'auto', labelKey: 'viewAuto', descKey: 'viewAutoDesc' },
+]
+const activeViewMode = computed(
+  () => viewModes.find(m => m.value === settings.viewMode) || viewModes[2],
+)
+
 function onOverlayClick(e) {
   if (e.target === e.currentTarget) emit('close')
+}
+
+async function setDefault() {
+  if (defaultBusy.value) return
+  defaultBusy.value = true
+  defaultMsg.value = null
+  try {
+    await invoke('register_default_md_handler')
+    const key =
+      platform.value === 'macos'
+        ? 'defaultSetOkMac'
+        : platform.value === 'windows'
+          ? 'defaultSetOkWin'
+          : 'defaultSetOkLinux'
+    defaultMsg.value = { ok: true, text: t(key, settings.lang) }
+  } catch (e) {
+    defaultMsg.value = { ok: false, text: t('defaultSetFail', settings.lang) + String(e) }
+  } finally {
+    defaultBusy.value = false
+  }
 }
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[9998] flex items-center justify-center" :style="{ background: 'var(--overlay-bg-light)', backdropFilter: 'blur(3px)' }" @click="onOverlayClick">
-    <div class="w-[440px] rounded-2xl" :style="{ background: 'var(--dialog-bg)', border: '1px solid var(--dialog-border)', boxShadow: '0 24px 80px var(--dialog-shadow)' }">
+  <div
+    class="fixed inset-0 z-[9998] flex items-center justify-center"
+    :style="{ background: 'var(--overlay-bg-light)', backdropFilter: 'blur(3px)' }"
+    @click="onOverlayClick"
+  >
+    <div
+      class="w-[480px] max-h-[92vh] rounded-2xl flex flex-col"
+      :style="{
+        background: 'var(--dialog-bg)',
+        border: '1px solid var(--dialog-border)',
+        boxShadow: '0 24px 80px var(--dialog-shadow)',
+      }"
+    >
       <!-- Header -->
-      <div class="flex items-center justify-between px-7 pt-6 pb-3">
-        <span class="text-base font-bold tracking-tight" :style="{ color: 'var(--text)' }">{{ t('settingsTitle', settings.lang) }}</span>
+      <div class="flex items-center justify-between px-7 pt-6 pb-3 flex-shrink-0">
+        <span class="text-base font-bold tracking-tight" :style="{ color: 'var(--text)' }">
+          {{ t('settingsTitle', settings.lang) }}
+        </span>
       </div>
 
       <!-- Body -->
-      <div class="flex flex-col px-7 pb-7">
+      <div class="flex flex-col px-7 pb-7 overflow-y-auto">
         <!-- Theme -->
         <div class="mb-6">
           <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTheme', settings.lang) }}</div>
@@ -98,9 +152,59 @@ function onOverlayClick(e) {
           </div>
         </div>
 
-        <!-- Close button (like about dialog) -->
+        <!-- Divider -->
+        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+        <!-- Default view -->
+        <div class="mb-6">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsView', settings.lang) }}</div>
+          <div class="grid grid-cols-3 gap-2 mb-2.5">
+            <button
+              v-for="m in viewModes"
+              :key="m.value"
+              class="px-2 py-2.5 rounded-xl text-[13px] font-medium cursor-pointer transition-all duration-200"
+              :style="{
+                border: '1.5px solid ' + (settings.viewMode === m.value ? 'var(--accent)' : 'var(--border)'),
+                background: settings.viewMode === m.value ? 'rgba(99,102,241,0.08)' : 'transparent',
+                color: settings.viewMode === m.value ? 'var(--accent)' : 'var(--text)',
+              }"
+              @click="settings.setViewMode(m.value)"
+            >{{ t(m.labelKey, settings.lang) }}</button>
+          </div>
+          <p class="text-xs leading-relaxed mb-1.5" :style="{ color: 'var(--text-muted)' }">
+            {{ t(activeViewMode.descKey, settings.lang) }}
+          </p>
+          <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('viewNote', settings.lang) }}</p>
+        </div>
+
+        <!-- Divider -->
+        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+        <!-- Default app -->
+        <div class="mb-6">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsDefaultApp', settings.lang) }}</div>
+          <p class="text-xs leading-relaxed mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('defaultAppDesc', settings.lang) }}</p>
+          <button
+            class="h-10 px-5 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
+            :style="{ background: 'var(--amber)', color: '#fff', opacity: defaultBusy ? 0.6 : 1 }"
+            :disabled="defaultBusy"
+            @click="setDefault"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+              <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" />
+              <path d="M8 5.5V8l1.8 1.8" />
+            </svg>
+            {{ defaultBusy ? '…' : t('btnSetDefault', settings.lang) }}
+          </button>
+          <p v-if="defaultMsg" class="mt-2.5 text-xs leading-relaxed" :style="{ color: defaultMsg.ok ? 'var(--accent)' : '#ef4444' }">
+            {{ defaultMsg.text }}
+          </p>
+          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('defaultAppNote', settings.lang) }}</p>
+        </div>
+
+        <!-- Close button -->
         <button
-          class="h-10 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
+          class="h-10 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] flex-shrink-0"
           :style="{ background: 'var(--accent)', color: '#fff' }"
           @click="emit('close')">{{ t('btnClose', settings.lang) }}</button>
       </div>

@@ -10,47 +10,51 @@ const props = defineProps({
   fileName: String,
   canGoBack: Boolean,
   canGoForward: Boolean,
+  folderOpen: Boolean,
+  fileTreeVisible: Boolean,
 })
-const emit = defineEmits(['open-file', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward', 'toggle-full-width'])
+const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree'])
 const settings = useSettingsStore()
-const exportOpen = ref(false)
+// 当前打开的下拉菜单：'' | 'open' | 'export'（互斥，同一时刻只开一个）
+const menu = ref('')
+const modifier = ref('⌘')
 
-function toggleExport() {
-  exportOpen.value = !exportOpen.value
+function toggleMenu(name) {
+  menu.value = menu.value === name ? '' : name
+}
+
+function onOpenClick(kind) {
+  menu.value = ''
+  emit(kind === 'file' ? 'open-file' : 'open-folder')
 }
 
 function onExportClick(format) {
-  exportOpen.value = false
+  menu.value = ''
   emit('export-doc', format)
 }
 
 function onClickOutside(e) {
-  if (exportOpen.value && !e.target.closest('.export-menu')) {
-    exportOpen.value = false
+  if (menu.value && !e.target.closest('.open-menu, .export-menu')) {
+    menu.value = ''
   }
 }
 
-onMounted(() => document.addEventListener('click', onClickOutside))
+onMounted(async () => {
+  document.addEventListener('click', onClickOutside)
+  let isMac = false
+  try {
+    isMac = (await invoke('get_platform')) === 'macos'
+  } catch (_) {
+    isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+  }
+  modifier.value = isMac ? '⌘' : 'Ctrl'
+})
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 
 function onToggleFullWidth() {
   // 仅转发事件；真正的开关与重新渲染由 App.vue 的 toggleFullWidth 统一处理，
   // 避免重复取反导致“点了两次等于没点”（点击无效果）。
   emit('toggle-full-width')
-}
-
-async function onOpenFile() {
-  try {
-    const p = await invoke('plugin:dialog|open', {
-      options: {
-        filters: [{ name: 'Markdown', extensions: ['md'] }],
-        multiple: false,
-        directory: false,
-        title: 'Select Markdown'
-      }
-    })
-    if (p) emit('open-file', p)
-  } catch (_) {}
 }
 </script>
 
@@ -89,6 +93,17 @@ async function onOpenFile() {
       <button class="btn btn-icon" :class="{ 'btn-active': settings.fullWidth }" :title="t('btnFullWidth', settings.lang)" @click="onToggleFullWidth">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M3 6V3h3"/><path d="M13 6V3h-3"/><path d="M3 10v3h3"/><path d="M13 10v3h-3"/></svg>
       </button>
+
+      <!-- 文件树显示/隐藏（目录式切换；打开文件夹后出现） -->
+      <button
+        v-if="folderOpen"
+        class="btn btn-icon"
+        :class="{ 'btn-active': fileTreeVisible }"
+        :title="t(fileTreeVisible ? 'fileTreeHide' : 'fileTreeShow', settings.lang)"
+        @click="emit('toggle-file-tree')"
+      >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><rect x="2.5" y="3" width="4" height="10" rx="1"/><path d="M9.5 5.5H14"/><path d="M9.5 8H14"/><path d="M9.5 10.5H14"/></svg>
+      </button>
     </div>
 
     <div class="flex gap-1.5 flex-shrink-0" style="-webkit-app-region: no-drag">
@@ -106,17 +121,50 @@ async function onOpenFile() {
 
       <!-- Default actions -->
       <template v-if="!isPdfView">
-        <button class="btn" @click="onOpenFile">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M2 5l6-3 6 3v7l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><path d="M8 8v7"/></svg>
-          {{ t('btnOpen', settings.lang) }}
-        </button>
+        <!-- 打开（文件 / 文件夹） -->
+        <div class="relative open-menu">
+          <button class="btn" @click.stop="toggleMenu('open')">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M2 5l6-3 6 3v7l-6 3-6-3V5z"/><path d="M2 5l6 3 6-3"/><path d="M8 8v7"/></svg>
+            {{ t('btnOpenMenu', settings.lang) }}
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+          <div
+            v-if="menu === 'open'"
+            class="absolute right-0 top-[36px] z-50 min-w-[210px] rounded-lg border shadow-lg py-1"
+            :style="{ background: 'var(--surface)', borderColor: 'var(--border)' }"
+          >
+            <button class="dropdown-item" @click="onOpenClick('file')">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5" style="color: var(--text-muted)"><path d="M4 1.5h5l3 3v10H4z"/><path d="M9 1.5v3h3"/><path d="M6.5 8.5h3"/><path d="M6.5 11h3"/></svg>
+              <span class="flex-1">{{ t('btnOpen', settings.lang) }}</span>
+              <span class="flex items-center gap-0.5 flex-shrink-0">
+                <kbd class="menu-kbd">{{ modifier }}</kbd>
+                <kbd class="menu-kbd">O</kbd>
+              </span>
+            </button>
+            <button class="dropdown-item" @click="onOpenClick('folder')">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5" style="color: var(--text-muted)"><path d="M1.5 5a1 1 0 0 1 1-1h3.2l1.6 2h5.2a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V5z"/></svg>
+              <span class="flex-1">{{ t('btnOpenFolder', settings.lang) }}</span>
+              <span class="flex items-center gap-0.5 flex-shrink-0">
+                <kbd class="menu-kbd">⇧</kbd>
+                <kbd class="menu-kbd">{{ modifier }}</kbd>
+                <kbd class="menu-kbd">O</kbd>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 导出（HTML / PDF / DOCX） -->
         <div class="relative export-menu">
-          <button class="btn" :disabled="!hasFile" @click.stop="toggleExport">
+          <button class="btn" :disabled="!hasFile" @click.stop="toggleMenu('export')">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M12 11v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-1"/><path d="M8 3v7"/><path d="M5 7l3 3 3-3"/></svg>
             {{ t('btnExport', settings.lang) }}
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3"><path d="M4 6l4 4 4-4"/></svg>
           </button>
-          <div v-if="exportOpen" class="absolute right-0 top-[36px] z-50 min-w-[140px] rounded-lg border shadow-lg py-1" :style="{ background: 'var(--surface)', borderColor: 'var(--border)' }">
+          <div
+            v-if="menu === 'export'"
+            class="absolute right-0 top-[36px] z-50 min-w-[140px] rounded-lg border shadow-lg py-1"
+            :style="{ background: 'var(--surface)', borderColor: 'var(--border)' }"
+          >
             <button class="dropdown-item" @click="onExportClick('html')">
               <span class="w-2 h-2 rounded-sm" style="background:#e34c26"></span>
               {{ t('exportHtml', settings.lang) }}
@@ -170,7 +218,7 @@ async function onOpenFile() {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 7px 12px;
   background: transparent;
   border: none;
   color: var(--text);
@@ -180,4 +228,18 @@ async function onOpenFile() {
   white-space: nowrap;
 }
 .dropdown-item:hover { background: var(--surface-hover); }
+.menu-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  background: var(--kbd-bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
 </style>

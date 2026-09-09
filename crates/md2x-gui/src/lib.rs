@@ -6,9 +6,21 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
-use tauri::{Manager, State};
 use tauri::menu::MenuItem;
+use tauri::{Manager, State};
 use tokio::sync::oneshot;
+
+/// 文件树节点（目录/文件），递归描述文件夹内的 Markdown 文件
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TreeNode {
+    name: String,
+    /// 绝对路径，统一使用 / 分隔符（Windows 也兼容）
+    path: String,
+    is_dir: bool,
+    /// 文件为空；目录为子节点列表（已剪除不含 .md 的空目录）
+    children: Vec<TreeNode>,
+}
 
 struct CachedPreview {
     /// 生成时的文件 mtime
@@ -29,9 +41,17 @@ struct AppState {
     show_about_flag: Mutex<bool>,
     /// 菜单「设置」点击标记，前端轮询消费
     settings_flag: Mutex<bool>,
+    /// 当前打开的文件夹根目录（文件树视图），None 表示单文件视图
+    folder_root: Mutex<Option<PathBuf>>,
     about_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     settings_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    open_folder_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    close_folder_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     quit_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// 菜单「打开文件夹」点击标记，前端轮询消费
+    show_open_folder_flag: Mutex<bool>,
+    /// 菜单「关闭文件夹」点击标记，前端轮询消费
+    close_folder_flag: Mutex<bool>,
     /// 缓存的预览结果（PDF + HTML），文件没变时复用
     cached_preview: Mutex<Option<CachedPreview>>,
 }
@@ -55,9 +75,18 @@ pub fn run() {
         last_known_mtime: Mutex::new(None),
         show_about_flag: Mutex::new(false),
         settings_flag: Mutex::new(false),
+        folder_root: Mutex::new(
+            std::env::var("MD2X_GUI_FOLDER")
+                .ok()
+                .map(|s| PathBuf::from(s)),
+        ),
         about_item: Mutex::new(None),
         settings_item: Mutex::new(None),
+        open_folder_item: Mutex::new(None),
+        close_folder_item: Mutex::new(None),
         quit_item: Mutex::new(None),
+        show_open_folder_flag: Mutex::new(false),
+        close_folder_flag: Mutex::new(false),
         cached_preview: Mutex::new(None),
     };
 
@@ -85,17 +114,29 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let about_item: MenuItem<tauri::Wry> = tauri::menu::MenuItemBuilder::with_id("about", "关于")
-                .build(app)?;
-            let settings_item: MenuItem<tauri::Wry> = tauri::menu::MenuItemBuilder::with_id("settings", "设置…")
-                .build(app)?;
-            let quit_item: MenuItem<tauri::Wry> = tauri::menu::MenuItemBuilder::with_id("quit", "退出")
-                .accelerator("CmdOrCtrl+Q")
-                .build(app)?;
+            let about_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("about", "关于").build(app)?;
+            let settings_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("settings", "设置…").build(app)?;
+            let quit_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("quit", "退出")
+                    .accelerator("CmdOrCtrl+Q")
+                    .build(app)?;
+            let open_folder_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("open_folder", "打开文件夹…")
+                    .accelerator("CmdOrCtrl+Shift+O")
+                    .build(app)?;
+            let close_folder_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("close_folder", "关闭文件夹")
+                    .accelerator("CmdOrCtrl+Shift+W")
+                    .build(app)?;
             let menu = tauri::menu::MenuBuilder::new(app)
                 .item(
                     &tauri::menu::SubmenuBuilder::new(app, "md2x")
                         .item(&about_item)
+                        .separator()
+                        .item(&open_folder_item)
+                        .item(&close_folder_item)
                         .separator()
                         .item(&settings_item)
                         .separator()
@@ -108,31 +149,45 @@ pub fn run() {
             if let Some(state) = app.try_state::<AppState>() {
                 *state.about_item.lock().unwrap() = Some(about_item);
                 *state.settings_item.lock().unwrap() = Some(settings_item);
+                *state.open_folder_item.lock().unwrap() = Some(open_folder_item);
+                *state.close_folder_item.lock().unwrap() = Some(close_folder_item);
                 *state.quit_item.lock().unwrap() = Some(quit_item);
             }
             Ok(())
         })
-        .on_menu_event(|app, event| {
-            match event.id().as_ref() {
-                "about" => {
-                    if let Some(state) = app.try_state::<AppState>() {
-                        if let Ok(mut flag) = state.show_about_flag.lock() {
-                            *flag = true;
-                        }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "about" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.show_about_flag.lock() {
+                        *flag = true;
                     }
                 }
-                "settings" => {
-                    if let Some(state) = app.try_state::<AppState>() {
-                        if let Ok(mut flag) = state.settings_flag.lock() {
-                            *flag = true;
-                        }
-                    }
-                }
-                "quit" => {
-                    app.exit(0);
-                }
-                _ => {}
             }
+            "settings" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.settings_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "open_folder" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.show_open_folder_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "close_folder" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.close_folder_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "quit" => {
+                app.exit(0);
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             set_file,
@@ -152,6 +207,14 @@ pub fn run() {
             check_show_about,
             check_show_settings,
             set_menu_language,
+            open_folder,
+            close_folder,
+            clear_file,
+            get_folder_path,
+            path_kind,
+            check_show_open_folder,
+            check_show_close_folder,
+            register_default_md_handler,
         ])
         .build(tauri::generate_context!())
         .expect("error")
@@ -162,9 +225,15 @@ pub fn run() {
                     if url.scheme() == "file" {
                         if let Ok(path) = url.to_file_path() {
                             let path_str = path.to_string_lossy().to_string();
+                            let is_dir = path.is_dir();
+                            // 文件记录为当前文件；文件夹记录为文件树根目录
                             if let Some(state) = handle.try_state::<AppState>() {
-                                if let Ok(mut cur) = state.current_file.lock() {
-                                    *cur = Some(path.clone());
+                                if is_dir {
+                                    if let Ok(mut cur) = state.folder_root.lock() {
+                                        *cur = Some(path);
+                                    }
+                                } else if let Ok(mut cur) = state.current_file.lock() {
+                                    *cur = Some(path);
                                 }
                             }
                             if let Some(state) = handle.try_state::<DropChannel>() {
@@ -311,22 +380,66 @@ fn check_show_settings(s: State<AppState>) -> bool {
     val
 }
 
+/// 前端轮询：检查菜单「打开文件夹」是否被点击
+#[tauri::command]
+fn check_show_open_folder(s: State<AppState>) -> bool {
+    let mut guard = s.show_open_folder_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「关闭文件夹」是否被点击
+#[tauri::command]
+fn check_show_close_folder(s: State<AppState>) -> bool {
+    let mut guard = s.close_folder_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
 /// 切换菜单文本语言
 #[tauri::command]
 fn set_menu_language(lang: String, s: State<AppState>) -> Result<(), String> {
     let about = s.about_item.lock().map_err(|e| e.to_string())?;
     let settings = s.settings_item.lock().map_err(|e| e.to_string())?;
+    let open_folder = s.open_folder_item.lock().map_err(|e| e.to_string())?;
+    let close_folder = s.close_folder_item.lock().map_err(|e| e.to_string())?;
     let quit = s.quit_item.lock().map_err(|e| e.to_string())?;
     match lang.as_str() {
         "en" => {
-            if let Some(ref item) = *about { item.set_text("About").ok(); }
-            if let Some(ref item) = *settings { item.set_text("Settings…").ok(); }
-            if let Some(ref item) = *quit { item.set_text("Quit").ok(); }
+            if let Some(ref item) = *about {
+                item.set_text("About").ok();
+            }
+            if let Some(ref item) = *settings {
+                item.set_text("Settings…").ok();
+            }
+            if let Some(ref item) = *open_folder {
+                item.set_text("Open Folder…").ok();
+            }
+            if let Some(ref item) = *close_folder {
+                item.set_text("Close Folder").ok();
+            }
+            if let Some(ref item) = *quit {
+                item.set_text("Quit").ok();
+            }
         }
         _ => {
-            if let Some(ref item) = *about { item.set_text("关于").ok(); }
-            if let Some(ref item) = *settings { item.set_text("设置…").ok(); }
-            if let Some(ref item) = *quit { item.set_text("退出").ok(); }
+            if let Some(ref item) = *about {
+                item.set_text("关于").ok();
+            }
+            if let Some(ref item) = *settings {
+                item.set_text("设置…").ok();
+            }
+            if let Some(ref item) = *open_folder {
+                item.set_text("打开文件夹…").ok();
+            }
+            if let Some(ref item) = *close_folder {
+                item.set_text("关闭文件夹").ok();
+            }
+            if let Some(ref item) = *quit {
+                item.set_text("退出").ok();
+            }
         }
     }
     Ok(())
@@ -342,9 +455,7 @@ fn check_file_changed(s: State<AppState>) -> Result<bool, String> {
     };
     drop(cur);
 
-    let current_mtime = std::fs::metadata(&p)
-        .ok()
-        .and_then(|m| m.modified().ok());
+    let current_mtime = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
 
     let mut stored = s.last_known_mtime.lock().map_err(|e| e.to_string())?;
     match (stored.as_ref(), current_mtime.as_ref()) {
@@ -378,15 +489,16 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
     drop(cur);
 
     // 获取当前文件 mtime
-    let current_mtime = std::fs::metadata(&p)
-        .ok()
-        .and_then(|m| m.modified().ok());
+    let current_mtime = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
 
     // 检查缓存：mtime 一致且 HTML 文件存在
     if let Some(ref mtime) = current_mtime {
         let cache = s.cached_preview.lock().map_err(|e| e.to_string())?;
         if let Some(ref cached) = *cache {
-            if cached.file_mtime == *mtime && cached.full_width == full_width && cached.html_path.exists() {
+            if cached.file_mtime == *mtime
+                && cached.full_width == full_width
+                && cached.html_path.exists()
+            {
                 return Ok(cached.html_path.to_string_lossy().to_string());
             }
         }
@@ -404,12 +516,10 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
+    let hb =
+        converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
-    let t = p
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Untitled");
+    let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
     let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
@@ -465,9 +575,12 @@ fn preview_pdf(full_width: Option<bool>, s: State<AppState>) -> Result<PreviewRe
     {
         let cache = s.cached_preview.lock().map_err(|e| e.to_string())?;
         if let Some(ref cached) = *cache {
-            if cached.file_mtime == current_mtime && cached.full_width == full_width && cached.pdf_path.exists() {
-                let pd = std::fs::read(&cached.pdf_path)
-                    .map_err(|e| format!("读 PDF 失败: {}", e))?;
+            if cached.file_mtime == current_mtime
+                && cached.full_width == full_width
+                && cached.pdf_path.exists()
+            {
+                let pd =
+                    std::fs::read(&cached.pdf_path).map_err(|e| format!("读 PDF 失败: {}", e))?;
                 return Ok(PreviewResult {
                     base64: b64(&pd),
                     temp_path: cached.pdf_path.to_string_lossy().to_string(),
@@ -489,12 +602,10 @@ fn preview_pdf(full_width: Option<bool>, s: State<AppState>) -> Result<PreviewRe
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
+    let hb =
+        converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
-    let t = p
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Untitled");
+    let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
     let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
@@ -548,13 +659,16 @@ fn render_full_html(p: &Path, full_width: bool) -> Result<String, String> {
     } else {
         (None, &md[..])
     };
-    let hb = converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
+    let hb =
+        converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, p);
-    let t = p
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Untitled");
-    Ok(template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width))
+    let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
+    Ok(template::render_html_template_with_metadata(
+        &hb,
+        t,
+        metadata.as_ref(),
+        full_width,
+    ))
 }
 
 /// 导出 HTML 到用户指定位置
@@ -614,7 +728,11 @@ fn get_file_name(s: State<AppState>) -> Result<Option<String>, String> {
         .lock()
         .map_err(|e| e.to_string())?
         .as_ref()
-        .and_then(|p| p.file_name().and_then(|s| s.to_str()).map(|s| s.to_string())))
+        .and_then(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        }))
 }
 
 /// 获取当前打开文件的完整路径（前端用来解析相对链接的基准目录）
@@ -624,6 +742,257 @@ fn get_file_path(s: State<AppState>) -> Option<String> {
         .lock()
         .ok()
         .and_then(|g| g.as_ref().map(|p| p.to_string_lossy().to_string()))
+}
+
+/// 清空当前打开的文件（切换文件夹卸载旧预览时用），回到无文件初始状态
+#[tauri::command]
+fn clear_file(s: State<AppState>) -> Result<(), String> {
+    *s.current_file.lock().map_err(|e| e.to_string())? = None;
+    *s.last_known_mtime.lock().map_err(|e| e.to_string())? = None;
+    *s.cached_preview.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
+// ==================== 文件夹 / 文件树命令 ====================
+
+/// 打开文件夹：记录根目录并递归扫描生成 .md 文件树（剪除不含 Markdown 的目录）
+#[tauri::command]
+fn open_folder(path: String, s: State<AppState>) -> Result<Vec<TreeNode>, String> {
+    let p = PathBuf::from(&path);
+    if !p.is_dir() {
+        return Err(format!("不是有效的文件夹: {}", p.display()));
+    }
+    *s.folder_root.lock().map_err(|e| e.to_string())? = Some(p.clone());
+    scan_tree(&p)
+}
+
+/// 关闭文件夹：回到单文件视图
+#[tauri::command]
+fn close_folder(s: State<AppState>) -> Result<(), String> {
+    *s.folder_root.lock().map_err(|e| e.to_string())? = None;
+    Ok(())
+}
+
+/// 获取当前打开的文件夹根目录（用于启动时自动展开文件树）
+#[tauri::command]
+fn get_folder_path(s: State<AppState>) -> Option<String> {
+    s.folder_root
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|p| p.to_string_lossy().to_string()))
+}
+
+/// 判断路径类型："dir" / "file" / "none"（拖拽、启动参数判断用）
+#[tauri::command]
+fn path_kind(path: String) -> String {
+    let p = Path::new(&path);
+    if p.is_dir() {
+        "dir".to_string()
+    } else if p.is_file() {
+        "file".to_string()
+    } else {
+        "none".to_string()
+    }
+}
+
+/// 递归扫描目录内 Markdown 文件树
+fn scan_tree(dir: &Path) -> Result<Vec<TreeNode>, String> {
+    let rd = std::fs::read_dir(dir).map_err(|e| format!("读取文件夹失败: {e}"))?;
+    let mut dirs: Vec<TreeNode> = Vec::new();
+    let mut files: Vec<TreeNode> = Vec::new();
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_dir() {
+            // 递归子目录，剪除不含任何 .md 的目录
+            if let Ok(children) = scan_tree(&path) {
+                if !children.is_empty() {
+                    dirs.push(TreeNode {
+                        name,
+                        path: normalize_path(&path),
+                        is_dir: true,
+                        children,
+                    });
+                }
+            }
+        } else if ft.is_file() && is_markdown(&name) {
+            files.push(TreeNode {
+                name,
+                path: normalize_path(&path),
+                is_dir: false,
+                children: Vec::new(),
+            });
+        }
+        // 符号链接不追踪，避免循环；指向 .md 的链接按非目录跳过
+    }
+    // 目录优先，各自按名称排序
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.extend(files);
+    Ok(dirs)
+}
+
+/// 是否 Markdown 文件（.md 后缀）
+fn is_markdown(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".md")
+}
+
+/// 路径统一为 / 分隔（跨平台比较、拼接用）
+fn normalize_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+// ==================== 默认打开程序 ====================
+
+/// 将本应用注册为 .md 文件的默认打开程序（当前用户级）
+/// 成功返回 Ok(true)；失败返回 Err(具体原因)
+#[tauri::command]
+fn register_default_md_handler() -> Result<bool, String> {
+    platform_register_default()
+}
+
+#[cfg(target_os = "windows")]
+fn platform_register_default() -> Result<bool, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_str = exe.to_string_lossy().replace('/', "\\");
+    let command = format!("\"{exe_str}\" \"%1\"");
+    let icon = format!("\"{exe_str}\",0");
+
+    let steps: [&[&str]; 6] = [
+        // .md 默认关联到自定义 ProgID
+        &[
+            "add",
+            r"HKCU\Software\Classes\.md",
+            "/ve",
+            "/d",
+            "md2x.markdown",
+            "/f",
+        ],
+        &[
+            "add",
+            r"HKCU\Software\Classes\.md\OpenWithProgids",
+            "/v",
+            "md2x.markdown",
+            "/f",
+        ],
+        &[
+            "add",
+            r"HKCU\Software\Classes\md2x.markdown",
+            "/ve",
+            "/d",
+            "Markdown Document (md2x)",
+            "/f",
+        ],
+        &[
+            "add",
+            r"HKCU\Software\Classes\md2x.markdown\DefaultIcon",
+            "/ve",
+            "/d",
+            &icon,
+            "/f",
+        ],
+        &[
+            "add",
+            r"HKCU\Software\Classes\md2x.markdown\shell\open\command",
+            "/ve",
+            "/d",
+            &command,
+            "/f",
+        ],
+        // 让 md2x 出现在「打开方式」列表中
+        &[
+            "add",
+            r"HKCU\Software\Classes\Applications\md2x.exe\shell\open\command",
+            "/ve",
+            "/d",
+            &command,
+            "/f",
+        ],
+    ];
+    for args in &steps {
+        let out = std::process::Command::new("reg")
+            .args(*args)
+            .output()
+            .map_err(|e| format!("reg 命令执行失败: {e}"))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("注册表写入失败: {}", err.trim()));
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_register_default() -> Result<bool, String> {
+    use std::process::Command;
+    // 通过 LaunchServices 用户级偏好写入 .md 的默认打开程序（与 duti 同机制）
+    let domain = "com.apple.LaunchServices/com.apple.launchservices.secure";
+    // 兼容 .md / .markdown 两种常见 UTI 声明
+    for uti in ["net.daringfireball.markdown", "public.markdown-file"] {
+        let entry =
+            format!("{{LSHandlerContentType = \"{uti}\"; LSHandlerRoleAll = \"com.mpe.md2x\";}}");
+        let out = Command::new("/usr/bin/defaults")
+            .args(["write", domain, "LSHandlers", "-array-add", &entry])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(format!("LaunchServices 写入失败: {}", err.trim()));
+        }
+    }
+    // 重建 LaunchServices 数据库使修改生效
+    let lsregister =
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let _ = Command::new(lsregister)
+        .args(["-kill", "-r", "-domain", "user"])
+        .output();
+    Ok(true)
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn platform_register_default() -> Result<bool, String> {
+    use std::process::Command;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // 生成用户级 .desktop 文件，供 xdg-mime 关联
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+                .map_err(|e| e.to_string())
+        })
+        .map_err(|e| e.to_string())?;
+    let apps_dir = data_home.join("applications");
+    std::fs::create_dir_all(&apps_dir).map_err(|e| e.to_string())?;
+    let desktop_path = apps_dir.join("md2x.desktop");
+    let content = format!(
+        "[Desktop Entry]\nType=Application\nName=md2x\nComment=Markdown preview & export\nExec=\"{}\" %f\nTerminal=false\nCategories=Office;Viewer;Utility;\nMimeType=text/markdown;text/x-markdown;\n",
+        exe.to_string_lossy()
+    );
+    std::fs::write(&desktop_path, content).map_err(|e| e.to_string())?;
+
+    let out = Command::new("xdg-mime")
+        .args([
+            "default",
+            "md2x.desktop",
+            "text/markdown",
+            "text/x-markdown",
+        ])
+        .output()
+        .map_err(|e| format!("xdg-mime 不可用: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("xdg-mime 执行失败: {}", err.trim()));
+    }
+    // 可选刷新桌面数据库，失败不影响结果
+    let _ = Command::new("update-desktop-database")
+        .arg(&apps_dir)
+        .output();
+    Ok(true)
 }
 
 // ==================== 工具函数 ====================
@@ -649,4 +1018,36 @@ fn b64(data: &[u8]) -> String {
         });
     }
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 仅收集 .md（忽略大小写），剪除不含 Markdown 的目录，目录优先排序
+    #[test]
+    fn scan_tree_collects_only_md_and_prunes_empty_dirs() {
+        let d = std::env::temp_dir().join(format!("md2x-scan-test-{}", std::process::id()));
+        let sub = d.join("sub");
+        std::fs::create_dir_all(sub.join("empty")).unwrap();
+        std::fs::write(sub.join("a.md"), "# a").unwrap();
+        std::fs::write(sub.join("b.MD"), "# b").unwrap();
+        std::fs::write(sub.join("skip.txt"), "x").unwrap();
+        std::fs::write(d.join("top.md"), "# top").unwrap();
+
+        let tree = scan_tree(&d).unwrap();
+        // 目录在前，文件在后；skip.txt 与空目录 empty 均被剪除
+        assert_eq!(tree.len(), 2);
+        assert!(tree[0].is_dir);
+        assert_eq!(tree[0].name, "sub");
+        assert_eq!(tree[0].children.len(), 2);
+        assert_eq!(tree[0].children[0].name, "a.md");
+        assert_eq!(tree[0].children[1].name, "b.MD");
+        assert!(!tree[1].is_dir);
+        assert_eq!(tree[1].name, "top.md");
+        // 路径统一使用 / 分隔符
+        assert!(!tree[0].path.contains('\\'));
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

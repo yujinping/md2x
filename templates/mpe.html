@@ -35,24 +35,27 @@
     /* ========== 布局：侧边栏 + 主内容 ========== */
     .layout {
       display: flex;
+      align-items: flex-start;
+      min-width: 0;
       max-width: var(--layout-max-width);
       margin: 0 auto;
       min-height: 100vh;
       position: relative;
     }
 
-    /* ========== 侧边栏 TOC ========== */
+    /* ========== 侧边栏 TOC（流式一列，不遮挡正文） ========== */
     .sidebar {
-      position: fixed;
+      position: sticky;
       top: 0;
-      left: 0;
-      bottom: 0;
+      flex: 0 0 auto;
+      align-self: flex-start;
       width: 260px;
+      height: 100vh;
       overflow-y: auto;
       background: #fff;
       border-right: 1px solid #e8e8e8;
       padding: 32px 16px;
-      z-index: 100;
+      z-index: 10;
       transition: width 0.25s ease, padding 0.25s ease, opacity 0.25s ease, border-color 0.25s ease;
     }
     .sidebar.resizing {
@@ -87,17 +90,14 @@
       margin-left: 0 !important;
     }
 
-    /* ========== 侧栏宽度拖拽手柄 ========== */
+    /* ========== 侧栏宽度拖拽手柄（流式占位，位于目录与正文之间） ========== */
     .sidebar-resizer {
-      position: fixed;
-      top: 0;
-      bottom: 0;
-      left: 265px;
-      width: 7px;
+      flex: 0 0 7px;
+      align-self: stretch;
+      position: relative;
       cursor: col-resize;
-      z-index: 150;
       background: transparent;
-      transition: background 0.15s, left 0.25s ease;
+      transition: background 0.15s;
     }
     .sidebar-resizer.resizing {
       transition: none !important;
@@ -198,10 +198,10 @@
     .toc .toc-h5 { padding-left: 76px; font-size: 11px; }
     .toc .toc-h6 { padding-left: 92px; font-size: 11px; }
 
-    /* ========== 主内容区 ========== */
+    /* ========== 主内容区（与目录同处一个 flex 流，自适应剩余宽度） ========== */
     .main-content {
       flex: 1;
-      margin-left: 260px;
+      min-width: 0;
       padding: 48px 56px 80px;
       background: #fff;
       min-height: 100vh;
@@ -214,6 +214,7 @@
       color: #333;
       background: transparent;
       color-scheme: light;
+      min-width: 0;
     }
 
     /* ========== 覆盖 github-markdown-css 样式 ========== */
@@ -585,7 +586,17 @@
     }
 
     /* ========== 响应式 ========== */
-    @media (max-width: 900px) {
+    /* 中等宽度（目录仍与正文并排，仅压缩内边距，避免因外层文件树挤压而隐藏目录） */
+    @media (max-width: 1080px) {
+      .main-content {
+        padding: 32px 28px 64px;
+      }
+      .sidebar {
+        padding: 28px 12px;
+      }
+    }
+    /* 极窄时才隐藏目录（保留文档自己的“三”切换按钮可由用户手动控制） */
+    @media (max-width: 640px) {
       .sidebar {
         display: none;
       }
@@ -596,8 +607,7 @@
         display: none;
       }
       .main-content {
-        margin-left: 0 !important;
-        padding: 24px 20px;
+        padding: 20px 16px 48px;
       }
       .back-to-top {
         display: none;
@@ -645,9 +655,6 @@
     function applySidebarWidth(w) {
       w = Math.max(SIDEBAR_MIN, Math.min(w, SIDEBAR_MAX()));
       sidebar.style.width = w + 'px';
-      mainContent.style.marginLeft = w + 'px';
-      toggleBtn.style.left = (w + 8) + 'px';
-      if (resizer) resizer.style.left = (w + 5) + 'px';
       return w;
     }
 
@@ -679,18 +686,15 @@
           localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebar.offsetWidth);
           sidebar.style.width = '0px';
           sidebar.style.padding = '32px 0px';
-          mainContent.style.marginLeft = '0px';
           toggleBtn.style.left = '14px';
           if (resizer) resizer.style.display = 'none';
         } else {
           var w = getSavedWidth();
           sidebar.style.width = w + 'px';
           sidebar.style.padding = '';
-          mainContent.style.marginLeft = w + 'px';
           toggleBtn.style.left = (w + 8) + 'px';
           if (resizer) {
             resizer.style.display = '';
-            resizer.style.left = (w + 5) + 'px';
           }
         }
       });

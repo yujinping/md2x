@@ -56,6 +56,13 @@ cd frontend && pnpm install && pnpm build
 cd .. && cargo run -p md2x-gui
 ```
 
+桌面应用支持：
+
+- **单文件预览**：打开 / 拖入 `.md` 文件，HTML 即时预览，可导出 PDF、HTML、DOCX
+- **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
+- **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
+- **默认打开程序**：设置中一键把 `.md` 关联到 md2x（Windows 写注册表、macOS 写 LaunchServices、Linux 使用 xdg-mime），双击 Markdown 文件即可用 md2x 打开
+
 ## 工作流
 
 ```

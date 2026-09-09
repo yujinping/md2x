@@ -16,8 +16,13 @@ fn main() {
         cli_run(file);
     } else if args.len() > 1 {
         // 有文件参数但无 --pdf → GUI 模式，通过环境变量传递路径
-        let file = &args[1];
-        std::env::set_var("MD2X_GUI_FILE", file);
+        // 传入的是文件夹则进入文件树视图，否则打开单文件
+        let target = &args[1];
+        if std::path::Path::new(target).is_dir() {
+            std::env::set_var("MD2X_GUI_FOLDER", target);
+        } else {
+            std::env::set_var("MD2X_GUI_FILE", target);
+        }
         gui_run();
     } else {
         // 无参数 → 启动 GUI

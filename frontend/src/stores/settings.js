@@ -5,11 +5,14 @@ import { invoke } from '@tauri-apps/api/core'
 const LS_THEME = 'mpe-theme'
 const LS_LANG = 'mpe-lang'
 const LS_FULL_WIDTH = 'mpe-full-width'
+const LS_VIEW_MODE = 'mpe-view-mode'
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref(localStorage.getItem(LS_THEME) || 'dark')
   const lang = ref(localStorage.getItem(LS_LANG) || 'zh-CN')
   const fullWidth = ref(localStorage.getItem(LS_FULL_WIDTH) === '1')
+  // 默认视图：single（单文件，无文件树）/ folder（文件夹树）/ auto（按启动内容自动）
+  const viewMode = ref(localStorage.getItem(LS_VIEW_MODE) || 'auto')
 
   function applyTheme(val) {
     document.documentElement.classList.toggle('light', val === 'light')
@@ -40,5 +43,10 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(LS_FULL_WIDTH, val ? '1' : '0')
   }
 
-  return { theme, lang, fullWidth, setTheme, setLang, setFullWidth }
+  function setViewMode(val) {
+    viewMode.value = val
+    localStorage.setItem(LS_VIEW_MODE, val)
+  }
+
+  return { theme, lang, fullWidth, viewMode, setTheme, setLang, setFullWidth, setViewMode }
 })

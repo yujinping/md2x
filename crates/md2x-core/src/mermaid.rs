@@ -68,9 +68,10 @@ pub fn is_mermaid_source(lang: &str, source: &str) -> bool {
         }
         let first = t.split_whitespace().next().unwrap_or("");
         let exact = MERMAID_KEYWORDS.iter().any(|k| first.eq_ignore_ascii_case(k));
+        // 前缀按字节长度切片可能切在 UTF-8 字符中间导致 panic，改用 get 安全截取
         let prefix = MERMAID_PREFIX
             .iter()
-            .any(|p| first.len() >= p.len() && first[..p.len()].eq_ignore_ascii_case(p));
+            .any(|p| first.get(..p.len()).is_some_and(|s| s.eq_ignore_ascii_case(p)));
         return exact || prefix;
     }
     false
@@ -131,9 +132,10 @@ fn source_starts_with_keyword(body: &str) -> bool {
         }
         let first = t.split_whitespace().next().unwrap_or("");
         let exact = MERMAID_KEYWORDS.iter().any(|k| first.eq_ignore_ascii_case(k));
+        // 前缀按字节长度切片可能切在 UTF-8 字符中间导致 panic，改用 get 安全截取
         let prefix = MERMAID_PREFIX
             .iter()
-            .any(|p| first.len() >= p.len() && first[..p.len()].eq_ignore_ascii_case(p));
+            .any(|p| first.get(..p.len()).is_some_and(|s| s.eq_ignore_ascii_case(p)));
         return exact || prefix;
     }
     false
@@ -351,6 +353,13 @@ mod tests {
     fn rejects_plain_code() {
         assert!(!is_mermaid_source("rust", "fn main() {}"));
         assert!(!is_mermaid_source("python", "print('hi')"));
+    }
+
+    #[test]
+    fn bare_fence_with_non_ascii_first_token_does_not_panic() {
+        // 回归：首词为中文等多字节文本时，按字节前缀匹配曾切在字符中间导致 panic
+        assert!(!is_mermaid_source("", "触发词：/zedx\n来一句普通文本\n"));
+        assert!(!source_starts_with_keyword("触发词：/zedx\n"));
     }
 
     #[test]
