@@ -1,5 +1,10 @@
 ## [unreleased]
 
+### ⚙️ Miscellaneous Tasks
+
+- *(md2x-gui)* 更新应用图标资源
+## [0.6.0] - 2026-09-09
+
 ### 🚀 Features
 
 - *(gui)* 支持文件夹文件树预览与默认程序关联
@@ -7,6 +12,7 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Add LICENSE.
+- Release v0.6.0
 ## [0.2.3] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
