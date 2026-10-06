@@ -1,8 +1,12 @@
-## [unreleased]
+## [0.7.0] - 2026-10-06
 
 ### 🚀 Features
 
 - 目录支持层级折叠，导出 HTML 增加全屏阅读
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.7.0
 ## [0.6.1] - 2026-09-09
 
 ### ⚙️ Miscellaneous Tasks
