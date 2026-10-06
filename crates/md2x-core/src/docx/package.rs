@@ -78,6 +78,8 @@ pub fn write_package(content: &DocxContent, dst: &Path) -> Result<(), MpeError> 
     write_zip(&mut zip, &opts, "word/document.xml", &content.document_xml)?;
     write_zip(&mut zip, &opts, "word/styles.xml", &styles_xml())?;
     write_zip(&mut zip, &opts, "word/numbering.xml", &numbering_xml())?;
+    // settings.xml 承载 w:updateFields，缺少它 Word 不会提示更新目录
+    write_zip(&mut zip, &opts, "word/settings.xml", &settings_xml())?;
     write_zip(
         &mut zip,
         &opts,
@@ -126,9 +128,22 @@ fn content_types_xml(media: &[(String, Vec<u8>, String, usize)]) -> String {
          <Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\
          <Override PartName=\"/word/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\
          <Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>\
+         <Override PartName=\"/word/settings.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml\"/>\
          <Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>\
          <Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>\
          </Types>"
+    )
+}
+
+/// 生成 word/settings.xml。
+///
+/// 核心是 `w:updateFields`：有它 Word/WPS 打开文档时会提示更新域，
+/// TOC 域才会被重算成带真实页码的目录。
+fn settings_xml() -> String {
+    format!(
+        "{XML_DECL}<w:settings xmlns:w=\"{NS_W}\">\
+         {}</w:settings>",
+        crate::docx::toc::update_fields_setting()
     )
 }
 
@@ -150,7 +165,8 @@ fn document_rels_xml(
     rels.push_str(&format!(
         "{XML_DECL}<Relationships xmlns=\"{NS_PKG_REL}\">\
          <Relationship Id=\"rId1\" Type=\"{NS_R}/styles\" Target=\"styles.xml\"/>\
-         <Relationship Id=\"rId2\" Type=\"{NS_R}/numbering\" Target=\"numbering.xml\"/>"
+         <Relationship Id=\"rId2\" Type=\"{NS_R}/numbering\" Target=\"numbering.xml\"/>\
+         <Relationship Id=\"rId3\" Type=\"{NS_R}/settings\" Target=\"settings.xml\"/>"
     ));
     // 按 rId 升序合并媒体与链接
     let mut items: Vec<(usize, &str, String)> = Vec::new();
@@ -230,8 +246,18 @@ fn styles_xml() -> String {
              </w:style>"
         ));
     }
+    // 目录标题样式：TOC 域的"目录"二字用它。
+    // outlineLvl 设为 9（正文级），避免这个标题本身被 TOC 域收录成一条。
+    let toc_heading = "<w:style w:type=\"paragraph\" w:styleId=\"TOCHeading\">\
+         <w:name w:val=\"TOC Heading\"/><w:basedOn w:val=\"Normal\"/><w:next w:val=\"Normal\"/>\
+         <w:qFormat/><w:uiPriority w:val=\"39\"/>\
+         <w:pPr><w:keepNext/><w:keepLines/><w:outlineLvl w:val=\"9\"/>\
+         <w:spacing w:before=\"240\" w:after=\"120\"/></w:pPr>\
+         <w:rPr><w:b/><w:sz w:val=\"32\"/><w:szCs w:val=\"32\"/></w:rPr></w:style>";
+
     format!(
         "{XML_DECL}<w:styles xmlns:w=\"{NS_W}\">\
+         {toc_heading}\
          <w:docDefaults>\
          <w:rPrDefault><w:rPr>\
          {}\

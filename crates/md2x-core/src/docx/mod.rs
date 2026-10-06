@@ -6,6 +6,7 @@ pub mod package;
 pub mod render;
 pub mod highlight;
 pub mod image;
+pub mod toc;
 
 use crate::error::MpeError;
 use crate::converter;
@@ -20,10 +21,37 @@ pub struct DocxContent {
     pub links: Vec<(usize, String)>,
 }
 
+/// 标题数量足够时才插入目录域。
+///
+/// 只有一两个标题时目录纯属累赘，且 Word 仍会弹「更新域」提示打断阅读。
+fn build_toc(body_md: &str) -> Option<String> {
+    // 只需判断标题是否够多，不关心具体内容，故用行首扫描即可，
+    // 避免为此引入完整的 Markdown AST 解析。
+    let count = body_md
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with('#') && t[1..].starts_with(['#', ' ', '#'])
+        })
+        .count();
+    if count < 2 {
+        return None;
+    }
+    Some(toc::render_toc_field("1-3"))
+}
+
 /// 将 Markdown 转换为 docx 内容（不落盘）。
 pub fn markdown_to_docx_content(md: &str, md_file: &Path) -> Result<DocxContent, MpeError> {
     let (_metadata, body_md) = converter::parse_front_matter(md);
     let (body, ctx) = render::render_body(body_md, md_file)?;
+
+    // 目录域放在正文最前。页码无法在生成端预知（.docx 是流式 XML），
+    // 交给 Word/WPS 打开时按真实分页重算。
+    let body = match build_toc(body_md) {
+        Some(toc) => format!("{toc}{body}"),
+        None => body,
+    };
+
     Ok(DocxContent {
         document_xml: package::document_wrapper(&body),
         media: ctx.media,
@@ -346,5 +374,57 @@ mod tests {
             content.document_xml.contains("<w:ind w:left=\"240\""),
             "代码文字应保留左侧内边距"
         );
+    }
+
+    #[test]
+    fn 标题足够时插入目录域() {
+        use super::*;
+        use std::path::Path;
+        let md = "# 一级\n\n内容\n\n## 二级\n\n内容";
+        let c = markdown_to_docx_content(md, Path::new("t.md")).unwrap();
+        assert!(c.document_xml.contains("TOC \\o"), "应含TOC 域指令");
+        assert!(c.document_xml.contains(r#"w:fldCharType="begin""#));
+        assert!(c.document_xml.contains("更新域"), "应含占位提示");
+    }
+
+    #[test]
+    fn 标题过少时不插入目录域() {
+        use super::*;
+        use std::path::Path;
+        // 单标题文档加目录纯属累赘，且会弹出无意义的更新提示
+        let md = "# 唯一标题\n\n内容";
+        let c = markdown_to_docx_content(md, Path::new("t.md")).unwrap();
+        assert!(!c.document_xml.contains("TOC \\o"), "不应有目录域");
+    }
+
+    #[test]
+    fn 目录域在正文标题之前() {
+        use super::*;
+        use std::path::Path;
+        let md = "# 一级\n\n内容\n\n## 二级";
+        let c = markdown_to_docx_content(md, Path::new("t.md")).unwrap();
+        let toc = c.document_xml.find("TOC \\o").expect("应有目录域");
+        let first_heading = c
+            .document_xml
+            .find("Heading1")
+            .expect("应有正文标题");
+        assert!(toc < first_heading, "目录应排在正文之前");
+    }
+
+    #[test]
+    fn 标题行扫描不误判非标题() {
+        use super::*;
+        use std::path::Path;
+        // 行中井号、井号后无空格，都不算标题
+        let md = "正文 # 井号\n\n#真标题\n\n内容\n\n# 第二标题\n\n内容";
+        let c = markdown_to_docx_content(md, Path::new("t.md")).unwrap();
+        assert!(
+            !c.document_xml.contains("TOC \\o"),
+            "只有 1 个真标题时不应插入目录"
+        );
+        // 两个合法标题时应触发
+        let md2 = "# 甲\n\n内容\n\n## 乙";
+        let c2 = markdown_to_docx_content(md2, Path::new("t.md")).unwrap();
+        assert!(c2.document_xml.contains("TOC \\o"));
     }
 }
