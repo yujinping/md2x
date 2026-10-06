@@ -1,3 +1,17 @@
+## [unreleased]
+
+### 🚀 Features
+
+- *(aggregate)* 目录聚合导出，跨文档锚点与链接重写
+- *(theme)* 导出与预览统一支持浅色/暗色双主题
+- *(export)* PDF 书签树与 DOCX 目录域
+- *(cli,gui)* 目录聚合导出支持 PDF/DOCX 格式
+- *(ui)* 设置面板接入主题预览联动与无 JS 降级
+
+### 📚 Documentation
+
+- 将 0.7.0 变更归入版本段落
+- 补充无 JS 降级说明
 ## [0.7.0] - 2026-10-06
 
 ### 🚀 Features
