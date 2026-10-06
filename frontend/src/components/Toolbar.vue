@@ -2,7 +2,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 
 const props = defineProps({
   hasFile: Boolean,
@@ -13,8 +13,10 @@ const props = defineProps({
   folderOpen: Boolean,
   fileTreeVisible: Boolean,
 })
-const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree'])
+const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'export-folder', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree'])
 const settings = useSettingsStore()
+// 文件夹聚合导出仅在文件夹视图下可用（需要整个目录作为输入）
+const hasFolder = computed(() => props.folderOpen)
 // 当前打开的下拉菜单：'' | 'open' | 'export'（互斥，同一时刻只开一个）
 const menu = ref('')
 const modifier = ref('⌘')
@@ -155,7 +157,7 @@ function onToggleFullWidth() {
 
         <!-- 导出（HTML / PDF / DOCX） -->
         <div class="relative export-menu">
-          <button class="btn" :disabled="!hasFile" @click.stop="toggleMenu('export')">
+          <button class="btn" :disabled="!hasFile && !hasFolder" @click.stop="toggleMenu('export')">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M12 11v1a1 1 0 01-1 1H5a1 1 0 01-1-1v-1"/><path d="M8 3v7"/><path d="M5 7l3 3 3-3"/></svg>
             {{ t('btnExport', settings.lang) }}
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3"><path d="M4 6l4 4 4-4"/></svg>
@@ -165,15 +167,24 @@ function onToggleFullWidth() {
             class="absolute right-0 top-[36px] z-50 min-w-[140px] rounded-lg border shadow-lg py-1"
             :style="{ background: 'var(--surface)', borderColor: 'var(--border)' }"
           >
-            <button class="dropdown-item" @click="onExportClick('html')">
+            <!--文件夹视图下可用：把整个目录聚合成单个 HTML-->
+            <button
+              v-if="hasFolder"
+              class="dropdown-item"
+              @click="emit('export-folder')"
+            >
+              <span class="w-2 h-2 rounded-sm" style="background:#8250df"></span>
+              {{ t('exportFolderHtml', settings.lang) }}
+            </button>
+            <button class="dropdown-item" :disabled="!hasFile" @click="onExportClick('html')">
               <span class="w-2 h-2 rounded-sm" style="background:#e34c26"></span>
               {{ t('exportHtml', settings.lang) }}
             </button>
-            <button class="dropdown-item" @click="onExportClick('pdf')">
+            <button class="dropdown-item" :disabled="!hasFile" @click="onExportClick('pdf')">
               <span class="w-2 h-2 rounded-sm" style="background:#e74c3c"></span>
               {{ t('exportPdf', settings.lang) }}
             </button>
-            <button class="dropdown-item" @click="onExportClick('docx')">
+            <button class="dropdown-item" :disabled="!hasFile" @click="onExportClick('docx')">
               <span class="w-2 h-2 rounded-sm" style="background:#2b579a"></span>
               {{ t('exportDocx', settings.lang) }}
             </button>

@@ -1,9 +1,12 @@
 export const i18n = {
   'zh-CN': {
     settingsTitle: '设置', settingsTheme: '主题', themeDark: '深色', themeLight: '浅色',
+    themeDarkDesc: '深色界面，护眼舒适',
+    themeLightDesc: '亮色界面，清晰明亮',
     settingsLang: '语言', btnClose: '关闭',
     btnOpen: '打开文件', btnOpenMenu: '打开', btnPreviewPdf: '预览 PDF', btnBack: '返回预览', btnSave: '保存 PDF', navBack: '后退', navForward: '前进',
     btnExport: '导出', exportHtml: 'HTML', exportPdf: 'PDF', exportDocx: 'DOCX',
+    exportFolderHtml: '文件夹 → 单个 HTML',
     statusExporting: '正在导出…', statusExportReady: '导出完成', statusExportError: '导出失败',
     welcomeTitle: '准备就绪', welcomeSub: '打开一个 Markdown 文档，即可预览并导出为 PDF、HTML、DOCX 等多种格式',
     welcomeFileHint: '点击顶部「打开」选文件，或直接把 .md 文件拖入窗口',
@@ -38,9 +41,12 @@ export const i18n = {
   },
   'en': {
     settingsTitle: 'Settings', settingsTheme: 'Theme', themeDark: 'Dark', themeLight: 'Light',
+    themeDarkDesc: 'Dark interface, easy on the eyes',
+    themeLightDesc: 'Light interface, crisp and clear',
     settingsLang: 'Language', btnClose: 'Close',
     btnOpen: 'Open File', btnOpenMenu: 'Open', btnPreviewPdf: 'Preview PDF', btnBack: '← Back', btnSave: 'Save PDF', navBack: 'Back', navForward: 'Forward',
     btnExport: 'Export', exportHtml: 'HTML', exportPdf: 'PDF', exportDocx: 'DOCX',
+    exportFolderHtml: 'Folder → single HTML',
     statusExporting: 'Exporting…', statusExportReady: 'Exported', statusExportError: 'Export failed',
     welcomeTitle: 'Ready', welcomeSub: 'Open a Markdown file to preview and export as PDF, HTML, or DOCX',
     welcomeFileHint: 'Pick a file from \u201cOpen\u201d at the top, or drop a .md file into the window',

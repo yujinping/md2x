@@ -96,7 +96,7 @@ async function goForward() {
 async function loadPreview() {
   let tmp
   try {
-    tmp = await invoke('get_html')
+    tmp = await invoke('get_html', { theme: settings.theme })
   } catch (e) {
     setStatus(e.toString(), 'error')
     return
@@ -226,7 +226,10 @@ async function onExportPdf() {
 
   setStatus('statusGeneratingPdf', 'busy')
   try {
-    const r = await invoke('preview_pdf', { fullWidth: settings.fullWidth })
+    const r = await invoke('preview_pdf', {
+      fullWidth: settings.fullWidth,
+      theme: settings.theme
+    })
     previewState.value = r
     showPdfViewer(r)
     setStatus('statusPdfReady', 'ready')
@@ -281,9 +284,44 @@ async function onExportDoc(format) {
     if (format === 'docx') {
       await invoke('export_docx', { dst: d })
     } else {
-      await invoke('export_' + format, { dst: d, fullWidth: settings.fullWidth })
+      await invoke('export_' + format, {
+        dst: d,
+        fullWidth: settings.fullWidth,
+        theme: settings.theme
+      })
     }
     setStatus('statusExportReady', 'ready')
+  } catch (err) {
+    setStatus(err.toString(), 'error')
+  }
+}
+
+// 导出整个文件夹为单个 HTML：把目录下所有 Markdown 聚合到一页
+async function onExportFolder() {
+  if (!folderPath.value) return
+  const base = folderName.value || 'document'
+  try {
+    const d = await invoke('plugin:dialog|save', {
+      options: {
+        filters: [{ name: 'HTML 文档', extensions: ['html'] }],
+        defaultPath: base + '.html',
+        title: 'Export Folder as HTML'
+      }
+    })
+    if (!d) return
+    setStatus('statusExporting', 'busy')
+    const count = await invoke('export_folder_html', {
+      src: folderPath.value,
+      dst: d,
+      fullWidth: settings.fullWidth,
+      theme: settings.theme
+    })
+    setStatus(
+      settings.lang === 'en'
+        ? `Exported ${count} documents`
+        : `已聚合 ${count} 篇文档`,
+      'ready'
+    )
   } catch (err) {
     setStatus(err.toString(), 'error')
   }
@@ -490,6 +528,16 @@ async function onOpenFile() {
 // File watcher + menu polling + startup
 onMounted(async () => {
   startDropListener()
+
+  // 主题切换后重渲染预览：后端把该档位固化进 HTML，
+  // 不重渲染则预览仍是旧主题，与设置面板所见不一致。
+  // PDF 视图无需处理——它展示的是已生成的 PDF（打印样式恒为浅色）。
+  settings.onThemeChange(() => {
+    if (isPdfView.value) return
+    if (!hasFile.value) return
+    loadPreview()
+  })
+
   setInterval(async () => {
     try {
       if (await invoke('check_file_changed')) {
@@ -558,6 +606,7 @@ onMounted(async () => {
       @save-pdf="onSavePdf"
       @show-html="showHtmlPreview"
       @export-doc="onExportDoc"
+      @export-folder="onExportFolder"
       @nav-back="goBack"
       @nav-forward="goForward"
       @toggle-full-width="toggleFullWidth"
