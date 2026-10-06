@@ -3,13 +3,13 @@ use md2x_core::chrome;
 use md2x_core::converter;
 use md2x_core::error;
 use md2x_core::template;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 
 #[derive(Parser)]
 #[command(name = "md2x", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
-    /// Path to the markdown file
+    /// Path to the markdown file, or a folder to aggregate into a single HTML
     file: String,
 
     /// Output format: pdf, html, png or docx
@@ -23,6 +23,15 @@ struct Cli {
     /// Render at full width: content spans ~98% of the screen instead of a fixed 860px column
     #[arg(long)]
     full_width: bool,
+
+    /// Output path for folder aggregation (defaults to <folder>/<folder-name>.html)
+    #[arg(long)]
+    output: Option<String>,
+
+    /// Theme baked into the exported HTML: auto (follow system), light or dark.
+    /// Baking it in keeps the file looking the same on any machine.
+    #[arg(long, default_value = "auto")]
+    theme: String,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -36,9 +45,59 @@ enum OutputFormat {
 fn run() -> Result<(), error::MpeError> {
     let cli = Cli::parse();
     let path = Path::new(&cli.file);
+    let theme = template::Theme::parse(&cli.theme);
 
     if !path.exists() {
         return Err(error::MpeError::FileNotFound(cli.file));
+    }
+
+    // 传入目录时走聚合导出：把整个目录树的 Markdown 合并为单个文件
+    if path.is_dir() {
+        // 目录名作为各格式默认文件名
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("document")
+            .to_string();
+        let ext = match cli.format {
+            OutputFormat::Pdf => "pdf",
+            OutputFormat::Docx => "docx",
+            _ => "html",
+        };
+        let dst = match &cli.output {
+            Some(o) => PathBuf::from(o),
+            None => path.join(format!("{name}.{ext}")),
+        };
+        let result =
+            md2x_core::aggregate::aggregate_folder_to_html(path, cli.full_width, theme)?;
+        //按 --format 分发：PDF 走 CDP 以生成书签树，DOCX 先拼 Markdown 再转换
+        match cli.format {
+            OutputFormat::Pdf => {
+                let tmp = std::env::temp_dir().join("md2x-cli-agg.html");
+                std::fs::write(&tmp, &result.html).map_err(error::MpeError::IoError)?;
+                let res = md2x_core::chrome::generate_pdf(
+                    &tmp.to_string_lossy(),
+                    &dst.to_string_lossy(),
+                );
+                let _ = std::fs::remove_file(&tmp);
+                res?;
+                eprintln!("已聚合 {} 篇文档 -> {}", result.doc_count, dst.display());
+            }
+            OutputFormat::Docx => {
+                let md = md2x_core::aggregate::concat_docs(path)?;
+                let tmp = std::env::temp_dir().join("md2x-cli-agg.md");
+                std::fs::write(&tmp, &md).map_err(error::MpeError::IoError)?;
+                let res = md2x_core::docx::convert_markdown_to_docx(&md, &tmp, &dst);
+                let _ = std::fs::remove_file(&tmp);
+                res?;
+                eprintln!("已聚合 {} 篇文档 -> {}", result.doc_count, dst.display());
+            }
+            _ => {
+                std::fs::write(&dst, &result.html).map_err(error::MpeError::IoError)?;
+                eprintln!("已聚合 {} 篇文档 -> {}", result.doc_count, dst.display());
+            }
+        }
+        return Ok(());
     }
 
     // 读取 Markdown
@@ -67,7 +126,13 @@ fn run() -> Result<(), error::MpeError> {
         .unwrap_or("Untitled");
 
     // 渲染完整 HTML
-    let full_html = template::render_html_template_with_metadata(&html_body, title, metadata.as_ref(), cli.full_width);
+    let full_html = template::render_html_template_with_metadata(
+        &html_body,
+        title,
+        metadata.as_ref(),
+        cli.full_width,
+        theme,
+    );
 
     // 按输出格式分发：HTML 直接写出，PDF / PNG 先渲染到临时 HTML 再交给 Chrome
     match cli.format {

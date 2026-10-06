@@ -1,3 +1,4 @@
+use md2x_core::aggregate;
 use md2x_core::chrome;
 use md2x_core::converter;
 use md2x_core::error::MpeError;
@@ -9,6 +10,18 @@ use std::time::SystemTime;
 use tauri::menu::MenuItem;
 use tauri::{Manager, State};
 use tokio::sync::oneshot;
+
+/// 主题参数的解析辅助：前端传字符串，缺失或非法时回退到「跟随系统」。
+mod theme_arg {
+    use md2x_core::template::Theme;
+
+    pub fn parse_opt(v: &Option<String>) -> Theme {
+        match v {
+            Some(s) => Theme::parse(s),
+            None => Theme::Auto,
+        }
+    }
+}
 
 /// 文件树节点（目录/文件），递归描述文件夹内的 Markdown 文件
 #[derive(Serialize, Clone)]
@@ -196,6 +209,7 @@ pub fn run() {
             preview_pdf,
             save_pdf_as,
             export_html,
+            export_folder_html,
             export_pdf,
             export_docx,
             get_file_name,
@@ -271,7 +285,14 @@ pub fn generate_pdf_from_file(path: &Path, full_width: bool) -> Result<PathBuf, 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
-    let f = template::render_html_template_with_metadata(&h, t, metadata.as_ref(), full_width);
+    // PDF 走 @media print，模板在打印样式下恒为浅色（纸是白的），故此处不传主题
+    let f = template::render_html_template_with_metadata(
+        &h,
+        t,
+        metadata.as_ref(),
+        full_width,
+        template::Theme::Auto,
+    );
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d)?;
@@ -476,9 +497,10 @@ fn check_file_changed(s: State<AppState>) -> Result<bool, String> {
 /// 生成 HTML 预览（写入临时文件，返回路径）
 /// 如果缓存命中且文件未变更，直接返回缓存的 HTML 路径
 #[tauri::command]
-fn get_html(s: State<AppState>) -> Result<String, String> {
+fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String> {
     // 全宽由前端在拿到 HTML 后注入 CSS 实现，后端始终渲染标准宽度
     let full_width = false;
+    let theme = theme_arg::parse_opt(&theme);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -520,7 +542,7 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
         converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
+    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width, theme);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -554,8 +576,13 @@ fn get_html(s: State<AppState>) -> Result<String, String> {
 /// 生成 PDF（通过 Chrome headless）并返回 base64 + 临时路径
 /// 如果缓存命中且文件未变更，直接返回缓存的 PDF（不重新生成）
 #[tauri::command(rename_all = "camelCase")]
-fn preview_pdf(full_width: Option<bool>, s: State<AppState>) -> Result<PreviewResult, String> {
+fn preview_pdf(
+    full_width: Option<bool>,
+    theme: Option<String>,
+    s: State<AppState>,
+) -> Result<PreviewResult, String> {
     let full_width = full_width.unwrap_or(false);
+    let theme = theme_arg::parse_opt(&theme);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -606,7 +633,7 @@ fn preview_pdf(full_width: Option<bool>, s: State<AppState>) -> Result<PreviewRe
         converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width);
+    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width, theme);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -647,7 +674,11 @@ fn save_pdf_as(src: String, dst: String) -> Result<(), String> {
 }
 
 /// 渲染完整 HTML（含模板、图片内嵌、SKILL 元数据），供导出命令复用。
-fn render_full_html(p: &Path, full_width: bool) -> Result<String, String> {
+fn render_full_html(
+    p: &Path,
+    full_width: bool,
+    theme: template::Theme,
+) -> Result<String, String> {
     let md = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
     let is_skill = p
         .file_name()
@@ -668,35 +699,99 @@ fn render_full_html(p: &Path, full_width: bool) -> Result<String, String> {
         t,
         metadata.as_ref(),
         full_width,
+        theme,
     ))
 }
 
 /// 导出 HTML 到用户指定位置
 #[tauri::command(rename_all = "camelCase")]
-fn export_html(dst: String, full_width: Option<bool>, s: State<AppState>) -> Result<(), String> {
+fn export_html(
+    dst: String,
+    full_width: Option<bool>,
+    theme: Option<String>,
+    s: State<AppState>,
+) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
+    let theme = theme_arg::parse_opt(&theme);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p, full_width)?;
+    let html = render_full_html(&p, full_width, theme)?;
     std::fs::write(&dst, html).map_err(|e| format!("导出失败: {e}"))?;
     Ok(())
 }
 
+/// 导出整个文件夹为单个文件：把目录下所有 Markdown 聚合，可选 HTML / PDF / DOCX
+///
+/// PDF 走 CDP 生成，带标准书签树（阅读器侧边栏可点击跳转）并在首页附目录页。
+#[tauri::command(rename_all = "camelCase")]
+fn export_folder_html(
+    src: String,
+    dst: String,
+    full_width: Option<bool>,
+    theme: Option<String>,
+    format: Option<String>,
+) -> Result<usize, String> {
+    let full_width = full_width.unwrap_or(false);
+    let theme = theme_arg::parse_opt(&theme);
+    let root = PathBuf::from(&src);
+    if !root.is_dir() {
+        return Err(format!("不是有效的文件夹: {}", root.display()));
+    }
+    let result = md2x_core::aggregate::aggregate_folder_to_html(&root, full_width, theme)
+        .map_err(|e| format!("导出失败: {e}"))?;
+
+    let fmt = format.unwrap_or_else(|| "html".to_string());
+    match fmt.as_str() {
+        // PDF：先写临时 HTML 再经Chrome 打印，最后清理
+        "pdf" => {
+            let tmp = std::env::temp_dir().join(format!("md2x-agg-{}.html", std::process::id()));
+            std::fs::write(&tmp, &result.html).map_err(|e| format!("导出失败: {e}"))?;
+            let pdf_path = dst.trim_end_matches(".html").to_string();
+            let pdf_res = md2x_core::chrome::generate_pdf(
+                &tmp.to_string_lossy(),
+                &pdf_path,
+            );
+            let _ = std::fs::remove_file(&tmp);
+            pdf_res.map_err(|e| format!("导出失败: {e}"))?;
+        }
+        "docx" => {
+            let md = aggregate::concat_docs(&root).map_err(|e| format!("导出失败: {e}"))?;
+            // 转DOCX 需要一个真实文件路径以解析相对图片，故先落临时文件
+            let tmp = std::env::temp_dir().join(format!("md2x-agg-{}.md", std::process::id()));
+            std::fs::write(&tmp, &md).map_err(|e| format!("导出失败: {e}"))?;
+            let docx_path = dst.trim_end_matches(".html").to_string();
+            let res = md2x_core::docx::convert_markdown_to_docx(&md, &tmp, Path::new(&docx_path));
+            let _ = std::fs::remove_file(&tmp);
+            res.map_err(|e| format!("导出失败: {e}"))?;
+        }
+        _ => {
+            std::fs::write(&dst, &result.html).map_err(|e| format!("导出失败: {e}"))?;
+        }
+    }
+    Ok(result.doc_count)
+}
+
 /// 导出 PDF 到用户指定位置
 #[tauri::command(rename_all = "camelCase")]
-fn export_pdf(dst: String, full_width: Option<bool>, s: State<AppState>) -> Result<(), String> {
+fn export_pdf(
+    dst: String,
+    full_width: Option<bool>,
+    theme: Option<String>,
+    s: State<AppState>,
+) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
+    let theme = theme_arg::parse_opt(&theme);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p, full_width)?;
+    let html = render_full_html(&p, full_width, theme)?;
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let hp = d.join("export-tmp.html");
