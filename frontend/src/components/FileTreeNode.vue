@@ -7,7 +7,7 @@ const props = defineProps({
   expanded: { type: Set, required: true },
   activePath: { type: String, default: '' },
 })
-const emit = defineEmits(['open', 'toggle'])
+const emit = defineEmits(['open', 'toggle', 'contextmenu'])
 
 const isDir = computed(() => props.node.isDir)
 const isOpen = computed(() => isDir.value && props.expanded.has(props.node.path))
@@ -16,6 +16,11 @@ const isActive = computed(() => !isDir.value && props.node.path === props.active
 function onClick() {
   if (isDir.value) emit('toggle', props.node.path)
   else emit('open', props.node.path)
+}
+
+// 右键菜单：把节点信息与鼠标位置上抛给 FileTree 统一渲染
+function onContextMenu(e) {
+  emit('contextmenu', { path: props.node.path, isDir: isDir.value, x: e.clientX, y: e.clientY })
 }
 </script>
 
@@ -29,6 +34,7 @@ function onClick() {
         background: isActive ? 'rgba(245,158,11,0.14)' : 'transparent',
       }"
       @click="onClick"
+      @contextmenu.prevent.stop="onContextMenu"
       @dblclick.stop
     >
       <!-- 展开箭头（文件夹） -->
@@ -92,6 +98,7 @@ function onClick() {
         :active-path="activePath"
         @open="p => emit('open', p)"
         @toggle="p => emit('toggle', p)"
+        @contextmenu="p => emit('contextmenu', p)"
       />
     </template>
   </div>

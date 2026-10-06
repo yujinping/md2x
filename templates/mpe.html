@@ -77,6 +77,42 @@
       margin-bottom: 16px;
       padding-left: 12px;
       white-space: nowrap;
+      /* 标题与批量按钮同行，靠右分布 */
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sidebar-bulk {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+    .toc-bulk-btn {
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: #b4b2a9;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+    .toc-bulk-btn svg {
+      width: 13px;
+      height: 13px;
+    }
+    .toc-bulk-btn:hover {
+      color: #0366d6;
+      background: #f0f4f8;
+    }
+    /* 无标题时（TOC 为空）隐藏批量按钮 */
+    .sidebar.no-toc .sidebar-bulk {
+      display: none;
     }
     /* 侧栏收起状态（仅控制视觉，width 由 JS 管理） */
     .sidebar.collapsed {
@@ -191,12 +227,70 @@
       color: #0366d6;
       background: #f0f4f8;
     }
-    .toc .toc-h1 { padding-left: 12px; font-weight: 600; font-size: 13px; }
-    .toc .toc-h2 { padding-left: 28px; font-size: 13px; }
-    .toc .toc-h3 { padding-left: 44px; font-size: 12px; }
-    .toc .toc-h4 { padding-left: 60px; font-size: 12px; }
-    .toc .toc-h5 { padding-left: 76px; font-size: 11px; }
-    .toc .toc-h6 { padding-left: 92px; font-size: 11px; }
+    /* 折叠按钮：行内箭头，点击只折叠/展开，不触发锚点跳转 */
+    .toc-toggle {
+      flex: 0 0 14px;
+      width: 14px;
+      height: 14px;
+      margin: 7px 0 0 -4px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: #b4b2a9;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s ease, color 0.15s ease;
+    }
+    .toc-toggle svg {
+      width: 10px;
+      height: 10px;
+    }
+    .toc-toggle:hover {
+      color: #0366d6;
+    }
+    /* 叶子节点占位，保持标题缩进一致但不可点击 */
+    .toc-toggle-leaf {
+      visibility: hidden;
+      cursor: default;
+    }
+    .toc-toggle-leaf:hover {
+      color: inherit;
+    }
+    /* 已展开的父节点箭头朝下 */
+    .toc-node.expanded > .toc-row > .toc-toggle {
+      transform: rotate(90deg);
+    }
+    /* 折叠态：隐藏整个子树 */
+    .toc-node:not(.expanded) > .toc-children {
+      display: none;
+    }
+    /* 行布局：箭头 + 链接同一行 */
+    .toc-row {
+      display: flex;
+      align-items: flex-start;
+      border-radius: 4px;
+    }
+    .toc-row:hover {
+      background: #f0f4f8;
+    }
+    .toc-row:hover a {
+      color: #0366d6;
+      background: transparent;
+    }
+    /* 层级样式：缩进由嵌套 ul 承担，字体大小仍按标题层级区分 */
+    .toc-children {
+      list-style: none;
+      padding-left: 14px;
+      margin: 0;
+    }
+    .toc-h1 { padding-left: 6px; font-weight: 600; font-size: 13px; }
+    .toc-h2 { padding-left: 6px; font-size: 13px; }
+    .toc-h3 { padding-left: 6px; font-size: 12px; }
+    .toc-h4 { padding-left: 6px; font-size: 12px; }
+    .toc-h5 { padding-left: 6px; font-size: 11px; }
+    .toc-h6 { padding-left: 6px; font-size: 11px; }
 
     /* ========== 主内容区（与目录同处一个 flex 流，自适应剩余宽度） ========== */
     .main-content {
@@ -507,9 +601,74 @@
       fill: none;
     }
 
+    /* ========== 全屏按钮 ========== */
+    .fullscreen-toggle {
+      position: fixed;
+      right: 32px;
+      bottom: 92px;
+      z-index: 300;
+      width: 40px;
+      height: 40px;
+      border: 1px solid #d0d7de;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6366f1;
+      transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      outline: none;
+      padding: 0;
+    }
+    .fullscreen-toggle:hover {
+      background: rgba(99,102,241,0.1);
+      border-color: #6366f1;
+      box-shadow: 0 4px 14px rgba(99,102,241,0.2);
+    }
+    .fullscreen-toggle:active {
+      transform: scale(0.92);
+    }
+    .fullscreen-toggle svg {
+      width: 22px;
+      height: 22px;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    /* 全屏状态下按钮贴右上角，避开回到顶部 */
+    body.fs-active .fullscreen-toggle {
+      bottom: auto;
+      top: 16px;
+      right: 16px;
+    }
+    body.fs-active .back-to-top {
+      bottom: 24px;
+      right: 24px;
+    }
+    /* 全屏时布局撑满视口 */
+    body.fs-active .layout,
+    body.fs-active .sidebar,
+    body.fs-active .main-content {
+      min-height: 100vh;
+      height: 100vh;
+    }
+    /* 不支持全屏 API（如 iframe 沙箱）时隐藏按钮，避免给出无效入口 */
+    .fullscreen-unsupported .fullscreen-toggle {
+      display: none;
+    }
+
     /* ========== 打印样式 ========== */
   @media print {
       .back-to-top {
+        display: none !important;
+      }
+      .fullscreen-toggle {
         display: none !important;
       }
       .sidebar-resizer {
@@ -612,6 +771,9 @@
       .back-to-top {
         display: none;
       }
+      .fullscreen-toggle {
+        display: none;
+      }
     }
   </style>
 </head>
@@ -620,7 +782,18 @@
   <div class="layout">
     <!-- 侧边栏 TOC -->
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-title">目录</div>
+      <div class="sidebar-title">
+        <span>目录</span>
+        <!-- 批量展开 / 收起：仅作用于目录树本身 -->
+        <span class="sidebar-bulk">
+          <button type="button" id="tocExpandAll" class="toc-bulk-btn" title="全部展开" aria-label="全部展开">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 6.5L8 4l2.5 2.5"/><path d="M5.5 12.5L8 10l2.5 2.5"/><path d="M3 6.5h10"/><path d="M3 12.5h10"/></svg>
+          </button>
+          <button type="button" id="tocCollapseAll" class="toc-bulk-btn" title="全部收起" aria-label="全部收起">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4L8 6.5 10.5 4"/><path d="M5.5 12.5L8 10l2.5 2.5"/><path d="M3 6.5h10"/><path d="M3 12.5h10"/></svg>
+          </button>
+        </span>
+      </div>
       <ul class="toc" id="toc">{{TOC}}</ul>
     </aside>
     <div class="sidebar-resizer" id="sidebarResizer" title="拖动调整宽度"></div>
@@ -636,6 +809,10 @@
 
   <button class="back-to-top" id="backToTop" title="回到顶部" aria-label="回到顶部">
     <svg viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <button class="fullscreen-toggle" id="fullscreenToggle" title="全屏" aria-label="全屏" aria-pressed="false">
+    <svg id="fullscreenIcon" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
   </button>
   <script>
     try { hljs.highlightAll(); } catch(e) {}
@@ -747,6 +924,186 @@
         if (el) el.scrollIntoView({ behavior: 'smooth' });
       });
     });
+
+    // ==================== TOC 折叠 ====================
+    // 每个文档按锚点 id 记住被折叠的节点，避免不同文档之间状态串味
+    var TOC_COLLAPSE_KEY = 'mpe-toc-collapsed:' + (document.title || 'untitled');
+
+    function readCollapsed() {
+      try {
+        var raw = localStorage.getItem(TOC_COLLAPSE_KEY);
+        var arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    function saveCollapsed(list) {
+      try {
+        localStorage.setItem(TOC_COLLAPSE_KEY, JSON.stringify(list));
+      } catch (e) {}
+    }
+
+    // 收集当前处于折叠态的节点 key
+    // 仅记录有子节点的节点：叶子折叠无视觉意义，写进存储只会污染状态
+    function collectCollapsed() {
+      var out = [];
+      document.querySelectorAll('.toc-node').forEach(function(li) {
+        if (li.getAttribute('data-leaf') === '1') return;
+        if (!li.classList.contains('expanded')) {
+          var key = li.getAttribute('data-key');
+          if (key) out.push(key);
+        }
+      });
+      return out;
+    }
+
+    // 恢复状态：默认全部展开，仅恢复上次被手动折叠的节点
+    var savedCollapsed = readCollapsed();
+    document.querySelectorAll('.toc-node').forEach(function(li) {
+      var key = li.getAttribute('data-key');
+      var isCollapsed = savedCollapsed.indexOf(key) !== -1;
+      li.classList.toggle('expanded', !isCollapsed);
+      // 同步无障碍语义，避免折叠节点的 aria-expanded 仍为 true
+      var btn = li.querySelector(':scope > .toc-row > .toc-toggle');
+      if (btn) btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+      // 叶子节点无子节点，标记不参与状态读写
+      if (!li.querySelector(':scope > .toc-children')) {
+        li.setAttribute('data-leaf', '1');
+      }
+    });
+
+    // 折叠 / 展开切换：按钮点击阻止冒泡，避免连带触发行的锚点跳转
+    document.querySelectorAll('.toc-toggle:not(.toc-toggle-leaf)').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var li = this.closest('.toc-node');
+        if (!li) return;
+        var expanded = li.classList.toggle('expanded');
+        this.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        saveCollapsed(collectCollapsed());
+      });
+    });
+
+    // 点击目录项跳转到折叠子树内的标题时，先自动展开其各级祖先，否则目标处于隐藏状态
+    document.querySelectorAll('.toc a').forEach(function(a) {
+      a.addEventListener('click', function() {
+        // 从最近的 .toc-node 自身开始，逐级向上补齐祖先的展开态
+        var node = a.closest('.toc-node');
+        var changed = false;
+        while (node) {
+          if (!node.classList.contains('expanded')) {
+            node.classList.add('expanded');
+            var btn = node.querySelector(':scope > .toc-row > .toc-toggle');
+            if (btn) btn.setAttribute('aria-expanded', 'true');
+            changed = true;
+          }
+          node = node.parentNode ? node.parentNode.closest('.toc-node') : null;
+        }
+        if (changed) {
+          saveCollapsed(collectCollapsed());
+          // 展开后目标位置下移，延后重算一次滚动终点
+          setTimeout(function() {
+            var id = a.getAttribute('href').replace('#', '');
+            var el = document.getElementById(id);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 220);
+        }
+      });
+    });
+
+    // 统一设置所有节点的展开态，并同步 aria 与持久化
+    // 叶子节点始终保持 expanded：它们没有子树，折叠无意义，且保持箭头状态一致
+    function setAllExpanded(expanded) {
+      document.querySelectorAll('.toc-node').forEach(function(li) {
+        var isLeaf = li.getAttribute('data-leaf') === '1';
+        var next = isLeaf ? true : expanded;
+        li.classList.toggle('expanded', next);
+        var btn = li.querySelector(':scope > .toc-row > .toc-toggle');
+        if (btn) btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+      });
+      saveCollapsed(collectCollapsed());
+    }
+
+    var expandAllBtn = document.getElementById('tocExpandAll');
+    var collapseAllBtn = document.getElementById('tocCollapseAll');
+    if (expandAllBtn) {
+      expandAllBtn.addEventListener('click', function() { setAllExpanded(true); });
+    }
+    if (collapseAllBtn) {
+      collapseAllBtn.addEventListener('click', function() { setAllExpanded(false); });
+    }
+    // 文档无任何标题时隐藏批量按钮，避免给出无效入口
+    if (!document.querySelector('.toc-node') && sidebar) {
+      sidebar.classList.add('no-toc');
+    }
+
+    // 打印 / 导出 PDF 时目录整体隐藏，此处兜底把所有节点展开以防样式被外部覆盖
+    window.addEventListener('beforeprint', function() {
+      document.querySelectorAll('.toc-node').forEach(function(li) {
+        li.classList.add('expanded');
+      });
+    });
+
+    // ==================== 全屏 ====================
+    // 使用标准 Fullscreen API + webkit 前缀；不支持时隐藏按钮
+    var fsBtn = document.getElementById('fullscreenToggle');
+    var fsIcon = document.getElementById('fullscreenIcon');
+    // 收集各浏览器的全屏入口，兼容旧版webkit /moz/ms 实现
+    var fsRequest = document.documentElement.requestFullscreen
+      || document.documentElement.webkitRequestFullscreen
+      || document.documentElement.mozRequestFullScreen
+      || document.documentElement.msRequestFullscreen;
+    var fsExit = document.exitFullscreen
+      || document.webkitExitFullscreen
+      || document.mozCancelFullScreen
+      || document.msExitFullscreen;
+    var fsElement = document.fullscreenElement
+      || document.webkitFullscreenElement
+      || document.mozFullScreenElement
+      || document.msFullscreenElement;
+
+    // 展开态图标（四角向内）与收起态图标（四角向外）
+    var ICON_ENTER = 'M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3';
+    var ICON_EXIT = 'M3 8h3a2 2 0 0 0 2-2V3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M21 16h-3a2 2 0 0 0-2 2v3';
+
+    function syncFullscreenUI() {
+      var active = !!fsElement;
+      document.body.classList.toggle('fs-active', active);
+      if (fsBtn) {
+        fsBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        fsBtn.setAttribute('aria-label', active ? '退出全屏' : '全屏');
+        fsBtn.title = active ? '退出全屏' : '全屏';
+      }
+      if (fsIcon) {
+        fsIcon.querySelector('path').setAttribute('d', active ? ICON_EXIT : ICON_ENTER);
+      }
+    }
+
+    if (fsBtn && fsRequest && fsExit) {
+      fsBtn.addEventListener('click', function() {
+        try {
+          if (fsElement) {
+            var p = fsExit.call(document);
+            if (p && p.catch) p.catch(function() {});
+          } else {
+            var p = fsRequest.call(document.documentElement);
+            if (p && p.catch) p.catch(function() {});
+          }
+        } catch (e) {
+          /* 权限策略拒绝全屏时静默失败，按钮状态由 fullscreenchange 校正 */
+        }
+      });
+      // 统一用fullscreenchange 同步，Esc 退出时也能正确复位
+      document.addEventListener('fullscreenchange', syncFullscreenUI);
+      document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
+      document.addEventListener('mozfullscreenchange', syncFullscreenUI);
+      document.addEventListener('MSFullscreenChange', syncFullscreenUI);
+      syncFullscreenUI();
+    } else if (fsBtn) {
+      document.body.classList.add('fullscreen-unsupported');
+    }
 
     // ==================== 回到顶部 ====================
     var backBtn = document.getElementById('backToTop');

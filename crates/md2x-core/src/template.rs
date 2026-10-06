@@ -161,22 +161,113 @@ fn generate_toc(body: &str) -> (String, String) {
         }
     }
 
-    // 构建 TOC HTML
+    // 构建 TOC HTML：按标题层级重建为可折叠的嵌套树
     let toc = if items.is_empty() {
         String::new()
     } else {
-        let mut t = String::from("<ul class=\"toc\" id=\"toc\">");
-        for (level, id, text) in &items {
-            let lvl: u32 = level[1..].parse().unwrap_or(1);
-            let cls = format!("toc-h{}", lvl.min(6));
-            let safe = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
-            t.push_str(&format!("<li><a href=\"#{}\" class=\"{}\">{}</a></li>", id, cls, safe));
-        }
-        t.push_str("</ul>");
-        t
+        render_toc_tree(&items)
     };
 
     (toc, result)
+}
+
+/// TOC 树节点：仅保存渲染所需字段，`children` 存子节点在 arena 中的下标
+struct TocNode {
+    /// 标题层级 1-6
+    level: u32,
+    /// 锚点 id（同时作为折叠状态的持久化 key）
+    id: String,
+    /// 标题纯文本
+    text: String,
+    /// 子节点下标
+    children: Vec<usize>,
+}
+
+/// 将扁平的标题序列按层级还原为树，再渲染成嵌套 `ul/li`。
+///
+/// 用 arena（Vec + 下标）而非嵌套结构体，避免在遍历过程中同时持有父节点
+/// 可变借用与新节点自身。
+fn build_toc_forest(items: &[(String, String, String)]) -> (Vec<TocNode>, Vec<usize>) {
+    let mut arena: Vec<TocNode> = Vec::with_capacity(items.len());
+    let mut roots: Vec<usize> = Vec::new();
+    // 祖先链栈，栈顶即当前标题的父节点
+    let mut stack: Vec<usize> = Vec::new();
+
+    for (level, id, text) in items {
+        let lvl: u32 = level[1..].parse().unwrap_or(1);
+        // 弹出层级 >= 当前标题的节点，它们不再是祖先（兼容 h1 后直接出现 h3 的跳级写法）
+        while let Some(&top) = stack.last() {
+            if arena[top].level >= lvl {
+                stack.pop();
+            } else {
+                break;
+            }
+        }
+
+        let idx = arena.len();
+        arena.push(TocNode {
+            level: lvl,
+            id: id.clone(),
+            text: text.clone(),
+            children: Vec::new(),
+        });
+        match stack.last() {
+            Some(&parent) => arena[parent].children.push(idx),
+            None => roots.push(idx),
+        }
+        stack.push(idx);
+    }
+
+    (arena, roots)
+}
+
+/// 渲染嵌套 TOC 的节点列表（不含外层 `ul`，外层由模板提供）。
+///
+/// 有子节点的 `li` 额外带折叠箭头（`.toc-toggle`），叶子节点的箭头占位隐藏以保持对齐。
+fn render_toc_tree(items: &[(String, String, String)]) -> String {
+    let (arena, roots) = build_toc_forest(items);
+    let mut out = String::new();
+    for &root in &roots {
+        render_toc_node(&arena, root, &mut out);
+    }
+    out
+}
+
+fn render_toc_node(arena: &[TocNode], idx: usize, out: &mut String) {
+    let node = &arena[idx];
+    let has_children = !node.children.is_empty();
+    let cls = format!("toc-h{}", node.level.min(6));
+    let safe = escape_html(&node.text);
+    // data-key 供前端按锚点 id 记忆每个节点的折叠状态
+    out.push_str(&format!(
+        "<li class=\"toc-node\" data-key=\"{}\"><div class=\"toc-row\">",
+        escape_html(&node.id)
+    ));
+    out.push_str(&format!(
+        "<button type=\"button\" class=\"toc-toggle{}\" aria-label=\"toggle\" aria-expanded=\"true\"><svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M6 4l4 4-4 4\"/></svg></button>",
+        if has_children { "" } else { " toc-toggle-leaf" }
+    ));
+    out.push_str(&format!(
+        "<a href=\"#{}\" class=\"{}\">{}</a></div>",
+        node.id, cls, safe
+    ));
+
+    if has_children {
+        out.push_str("<ul class=\"toc-children\">");
+        for &child in &node.children {
+            render_toc_node(arena, child, out);
+        }
+        out.push_str("</ul>");
+    }
+    out.push_str("</li>");
+}
+
+/// TOC 文本来自剥离标签后的标题内容，仍需转义以防`<` 之类字符破坏结构
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn strip_tags(s: &str) -> String {
@@ -200,4 +291,94 @@ fn make_id(text: &str, counter: u64) -> String {
     let id = id.trim().to_lowercase();
     let id: String = id.split_whitespace().collect::<Vec<_>>().join("-");
     if id.is_empty() { format!("heading-{}", counter) } else { id }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn items(levels: &[(&str, u32)]) -> Vec<(String, String, String)> {
+        levels
+            .iter()
+            .enumerate()
+            .map(|(i, (t, l))| {
+                (format!("h{}", l), format!("id-{}", i), t.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn 层级被还原为父子结构() {
+        let list = items(&[("A", 1), ("B", 2), ("C", 3), ("D", 2)]);
+        let (arena, roots) = build_toc_forest(&list);
+        assert_eq!(roots.len(), 1, "h1 应为唯一根节点");
+        let a = &arena[roots[0]];
+        assert_eq!(a.text, "A");
+        assert_eq!(a.children.len(), 2, "A 下应挂 B 与 D 两个子节点");
+        assert_eq!(arena[a.children[0]].children.len(), 1, "B 下应挂 C");
+        let c = a.children[0];
+        assert_eq!(arena[arena[c].children[0]].text, "C");
+        assert!(arena[a.children[1]].children.is_empty(), "D 为叶子");
+    }
+
+    #[test]
+    fn 跳级标题挂到最近的较浅祖先() {
+        // h1 后直接出现 h3：h3 应作为 h1 的子节点，而不是新建根
+        let list = items(&[("A", 1), ("C", 3)]);
+        let (arena, roots) = build_toc_forest(&list);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(arena[roots[0]].children.len(), 1);
+    }
+
+    #[test]
+    fn 多个根标题保持平级() {
+        let list = items(&[("A", 1), ("B", 1), ("C", 2)]);
+        let (arena, roots) = build_toc_forest(&list);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(arena[roots[1]].children.len(), 1, "C 挂在 B 下");
+    }
+
+    #[test]
+    fn 渲染结果含折叠按钮且叶子占位对齐() {
+        // A 下挂 B，A 有子节点应给可折叠按钮；B 为叶子应输出占位按钮以保持缩进对齐
+        let list = items(&[("A", 1), ("B", 2)]);
+        let html = render_toc_tree(&list);
+        assert!(html.starts_with("<li class=\"toc-node\""), "只输出节点，外层 ul 由模板提供");
+        assert!(html.contains("class=\"toc-toggle\""), "有子节点应带可折叠按钮");
+        assert!(html.contains("class=\"toc-toggle toc-toggle-leaf\""), "叶子应输出占位按钮");
+        assert!(html.contains("data-key=\"id-0\""));
+        assert!(html.contains("class=\"toc-h2\""), "层级类名用于字号缩进");
+        assert_eq!(html.matches("toc-toggle").count(), 3, "两个按钮各含一次类名，子 ul 一次");
+    }
+
+    #[test]
+    fn 标题文本被转义防止破坏结构() {
+        let list = vec![("h2".to_string(), "x".to_string(), "<b>&\"".to_string())];
+        let html = render_toc_tree(&list);
+        assert!(html.contains("&lt;b&gt;&amp;&quot;"));
+        assert!(!html.contains("<b>"));
+    }
+
+    #[test]
+    fn 正文标题被注入锚点id() {
+        let body = "<h1>标题一</h1><p>正文</p><h2>子节</h2>";
+        let (toc, fixed) = generate_toc(body);
+        assert!(fixed.contains("id=\"标题一\""));
+        assert!(fixed.contains("id=\"子节\""));
+        assert!(toc.contains("href=\"#标题一\""));
+        assert!(toc.contains("toc-children"), "h2 应嵌套在 h1 下");
+    }
+
+    #[test]
+    fn 无标题时不输出目录容器() {
+        let (toc, _) = generate_toc("<p>只有正文</p>");
+        assert!(toc.is_empty());
+    }
+
+    #[test]
+    fn 已带id的标题不重复注入() {
+        let body = "<h2 id=\"custom\">已有 id</h2>";
+        let (_, fixed) = generate_toc(body);
+        assert_eq!(fixed.matches("id=\"custom\"").count(), 1);
+    }
 }
