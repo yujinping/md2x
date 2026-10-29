@@ -19,11 +19,11 @@ pub fn resolve_image_bytes(src: &str, md_file: &Path) -> Option<(Vec<u8>, String
         std::path::PathBuf::from(src)
     } else if src.starts_with('/') {
         // Hugo 风格：/images/foo.png → <hugo_root>/static/images/foo.png（与 HTML 版一致）
-        match hugo_root {
-            Some(root) => root
-                .join("static")
-                .join(src.strip_prefix('/').unwrap_or(src)),
-            None => return None,
+        {
+            let root = hugo_root?;
+            root
+        .join("static")
+        .join(src.strip_prefix('/').unwrap_or(src))
         }
     } else if Path::new(src).is_absolute() {
         // 不存在的绝对路径（Windows 盘符路径）按原样读取，交由调用方兜底

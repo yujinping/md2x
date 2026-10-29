@@ -40,8 +40,8 @@ pub(crate) fn find_chrome() -> Result<String, MpeError> {
             return Ok(candidate.to_string());
         }
         // Windows 上也尝试直接当命令执行（如果候选不含路径分隔符）
-        if cfg!(target_os = "windows") && !candidate.contains('\\') {
-            if Command::new("where")
+        if cfg!(target_os = "windows") && !candidate.contains('\\')
+            && Command::new("where")
                 .arg(candidate)
                 .output()
                 .map(|o| o.status.success())
@@ -49,7 +49,6 @@ pub(crate) fn find_chrome() -> Result<String, MpeError> {
             {
                 return Ok(candidate.to_string());
             }
-        }
     }
     Err(MpeError::ChromeNotFound)
 }

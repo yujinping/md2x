@@ -71,20 +71,20 @@ pub fn write_package(content: &DocxContent, dst: &Path) -> Result<(), MpeError> 
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    write_zip(&mut zip, &opts, "[Content_Types].xml", &content_types_xml(&content.media))?;
-    write_zip(&mut zip, &opts, "_rels/.rels", &root_rels_xml())?;
-    write_zip(&mut zip, &opts, "docProps/core.xml", &core_xml())?;
-    write_zip(&mut zip, &opts, "docProps/app.xml", &app_xml())?;
+    write_zip(&mut zip, &opts, "[Content_Types].xml", content_types_xml(&content.media))?;
+    write_zip(&mut zip, &opts, "_rels/.rels", root_rels_xml())?;
+    write_zip(&mut zip, &opts, "docProps/core.xml", core_xml())?;
+    write_zip(&mut zip, &opts, "docProps/app.xml", app_xml())?;
     write_zip(&mut zip, &opts, "word/document.xml", &content.document_xml)?;
-    write_zip(&mut zip, &opts, "word/styles.xml", &styles_xml())?;
-    write_zip(&mut zip, &opts, "word/numbering.xml", &numbering_xml())?;
+    write_zip(&mut zip, &opts, "word/styles.xml", styles_xml())?;
+    write_zip(&mut zip, &opts, "word/numbering.xml", numbering_xml())?;
     // settings.xml 承载 w:updateFields，缺少它 Word 不会提示更新目录
-    write_zip(&mut zip, &opts, "word/settings.xml", &settings_xml())?;
+    write_zip(&mut zip, &opts, "word/settings.xml", settings_xml())?;
     write_zip(
         &mut zip,
         &opts,
         "word/_rels/document.xml.rels",
-        &document_rels_xml(&content.media, &content.links),
+        document_rels_xml(&content.media, &content.links),
     )?;
 
     for (name, bytes, _ct, _rid) in &content.media {
@@ -101,7 +101,7 @@ fn write_zip<W: Write + std::io::Seek>(
     name: &str,
     data: impl AsRef<[u8]>,
 ) -> Result<(), MpeError> {
-    zip.start_file(name, opts.clone()).map_err(zip_err)?;
+    zip.start_file(name, *opts).map_err(zip_err)?;
     zip.write_all(data.as_ref()).map_err(MpeError::IoError)
 }
 

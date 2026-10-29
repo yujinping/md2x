@@ -274,7 +274,7 @@ pub(crate) fn download_image_bytes(url: &str) -> Option<(Vec<u8>, String)> {
 /// 极简 base64 编码（无依赖）
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
@@ -301,10 +301,10 @@ fn base64_encode(data: &[u8]) -> String {
 /// 若不存在 frontmatter，返回 (None, 原始文本)
 pub fn parse_front_matter(md: &str) -> (Option<HashMap<String, String>>, &str) {
     let s = md.trim_start();
-    if s.starts_with("---") {
-        if let Some(end) = s[3..].find("\n---") {
-            let front = &s[3..3 + end];
-            let body = s[3 + end + 4..].trim_start();
+    if let Some(rest) = s.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
+            let front = &rest[..end];
+            let body = rest[end + 4..].trim_start();
 
             let mut map = HashMap::new();
             for line in front.lines() {
@@ -326,10 +326,10 @@ pub fn parse_front_matter(md: &str) -> (Option<HashMap<String, String>>, &str) {
 /// 去掉 YAML 元数据（`---\n...\n---` 开头的内容）
 fn strip_front_matter(md: &str) -> &str {
     let s = md.trim_start();
-    if s.starts_with("---") {
-        if let Some(end) = s[3..].find("\n---") {
+    if let Some(rest) = s.strip_prefix("---") {
+        if let Some(end) = rest.find("\n---") {
             // end 是 \n--- 中 \n 的位置，\n--- 共 4 字符
-            return s[3 + end + 4..].trim_start();
+            return rest[end + 4..].trim_start();
         }
     }
     md
