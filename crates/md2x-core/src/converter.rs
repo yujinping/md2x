@@ -197,7 +197,12 @@ fn try_resolve_src(tag: &str, base: &Path, hugo_root: Option<&Path>) -> String {
             }
         }
         Some(s) if is_resolvable_path(s) => {
-            let img_path = if s.starts_with('/') {
+            let img_path = if Path::new(s).is_absolute() && Path::new(s).exists() {
+                // 真实存在的绝对路径优先：Unix 的 /home/a.png 与 Windows 的 C:\a.png
+                // 都属于「绝对路径」而非 Hugo 的站点根路径。判定顺序必须与 DOCX
+                // 路径（docx/image.rs）一致，否则同一份 Markdown 两种导出结果不同。
+                PathBuf::from(s)
+            } else if s.starts_with('/') {
                 // Hugo 风格：/images/foo.png → <hugo_root>/static/images/foo.png
                 match hugo_root {
                     Some(root) => root.join("static").join(s.strip_prefix('/').unwrap_or(s)),

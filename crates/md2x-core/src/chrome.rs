@@ -1,5 +1,4 @@
 use crate::error::MpeError;
-use std::path::Path;
 use std::process::Command;
 
 // ── Chrome / Chromium / Edge 候选路径 ──────────────────
@@ -19,9 +18,6 @@ const CHROME_CANDIDATES: &[&str] = &[
     "C:\\Program Files (x86)\\Chromium\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-    // 也查 PATH（用户自行安装的情况）
-    "chrome",
-    "msedge",
 ];
 
 #[cfg(target_os = "linux")]
@@ -32,23 +28,74 @@ const CHROME_CANDIDATES: &[&str] = &[
     "/usr/bin/chromium-browser",
     "/usr/bin/microsoft-edge",
     "/usr/bin/microsoft-edge-stable",
+    "/snap/bin/chromium",
 ];
 
-pub(crate) fn find_chrome() -> Result<String, MpeError> {
-    for candidate in CHROME_CANDIDATES {
-        if Path::new(candidate).exists() {
-            return Ok(candidate.to_string());
+/// PATH 检索用的裸名（用户自行安装 / 包管理器安装的情况）。
+///
+/// 走的仍是 `ext_diagram::resolve_binary`：macOS 从 Finder 启动的 GUI
+/// 进程继承 launchd 最小 PATH，只靠裸名 spawn 一律找不到。
+#[cfg(target_os = "macos")]
+const CHROME_BIN_NAMES: &[&str] = &["google-chrome", "chromium", "chrome", "msedge"];
+
+#[cfg(target_os = "windows")]
+const CHROME_BIN_NAMES: &[&str] = &["chrome", "msedge"];
+
+#[cfg(target_os = "linux")]
+const CHROME_BIN_NAMES: &[&str] = &[
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+];
+
+/// 用户级安装位置（安装器默认写当前用户目录，不在 Program Files / /Applications）。
+///
+/// - macOS：`~/Applications/...app/Contents/MacOS/...`
+/// - Windows：`%LOCALAPPDATA%\...\chrome.exe`（Chrome 默认「仅为我安装」走这里）
+fn user_level_candidates() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let apps = std::path::PathBuf::from(home).join("Applications");
+        for rel in [
+            "Google Chrome.app/Contents/MacOS/Google Chrome",
+            "Chromium.app/Contents/MacOS/Chromium",
+            "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ] {
+            out.push(apps.join(rel));
         }
-        // Windows 上也尝试直接当命令执行（如果候选不含路径分隔符）
-        if cfg!(target_os = "windows") && !candidate.contains('\\')
-            && Command::new("where")
-                .arg(candidate)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-            {
-                return Ok(candidate.to_string());
-            }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let base = std::path::PathBuf::from(local);
+        out.push(base.join("Google").join("Chrome").join("Application").join("chrome.exe"));
+        out.push(base.join("Chromium").join("Application").join("chrome.exe"));
+        out.push(base.join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
+    }
+
+    out
+}
+
+pub(crate) fn find_chrome() -> Result<String, MpeError> {
+    // 1) 固定安装位置（系统级 + 用户级）
+    for candidate in CHROME_CANDIDATES
+        .iter()
+        .map(std::path::PathBuf::from)
+        .chain(user_level_candidates())
+    {
+        if candidate.is_file() {
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+    // 2) 裸名解析（含 PATH 与平台回退目录），返回绝对路径
+    for name in CHROME_BIN_NAMES {
+        if let Some(p) = crate::ext_diagram::resolve_binary(name) {
+            return Ok(p.to_string_lossy().to_string());
+        }
     }
     Err(MpeError::ChromeNotFound)
 }
@@ -76,6 +123,7 @@ pub fn generate_pdf(html_path: &str, pdf_path: &str) -> Result<(), MpeError> {
 fn generate_pdf_via_cli(html_path: &str, pdf_path: &str) -> Result<(), MpeError> {
     let chrome = find_chrome()?;
     let abs_html = std::fs::canonicalize(html_path).map_err(MpeError::IoError)?;
+    let file_url = to_file_url(&abs_html);
 
     let output = Command::new(&chrome)
         .args([
@@ -86,7 +134,7 @@ fn generate_pdf_via_cli(html_path: &str, pdf_path: &str) -> Result<(), MpeError>
             "--no-pdf-header-footer",
             "--print-to-pdf-background",
             &format!("--print-to-pdf={}", pdf_path),
-            &format!("file://{}", abs_html.display()),
+            &file_url,
         ])
         .output()
         .map_err(MpeError::IoError)?;
@@ -156,12 +204,69 @@ fn generate_pdf_via_cdp(
 ///
 /// 只对路径部分做百分号编码，保留分隔符；中文与空格必须转义，
 /// 否则 Chrome 会拒绝该 URL（新建标签页会立刻关闭）。
+/// 把本地路径转换为 file URL（跨平台正确性由此保证）。
+///
+/// 三个平台的关键差异：
+/// - **分隔符**：file URL 只认 `/`，Windows 的 `\` 必须转换（否则被百分号编码成 `%5C`）；
+/// - **盘符**：`C:\a\b.png` 需要三个斜杠 `file:///C:/a/b.png`，
+///   直接拼 `file://C:...` 会把 `C:` 当成主机名；
+/// - **UNC 共享**：`\\server\share` 应得到 `file://server/share`（两个斜杠）。
+///
+/// 非 ASCII（中文路径、空格）一律按 UTF-8 字节做百分号编码——
+/// 裸 UTF-8 会被 Chrome 判为非法 URL，表现为新建标签页立刻断开。
 pub(crate) fn to_file_url(path: &std::path::Path) -> String {
-    let raw = path.to_string_lossy();
-    let mut out = String::from("file://");
-    for b in raw.bytes() {
+    path_to_file_url(&path.to_string_lossy(), cfg!(windows))
+}
+
+/// 去掉 Windows `canonicalize` 产生的 verbatim 前缀。
+///
+/// `std::fs::canonicalize` 在 Windows 上返回 `\\?\C:\a\b` 形式；这个前缀
+/// 会让 file URL 变成 `file://?/C:/a/b`（把 `?` 当主机名），部分 Shell API
+/// 也不接受。UNC 形式 `\\?\UNC\server\share` 需还原为 `\\server\share`。
+///
+/// 不做 cfg 限定：以便在任意平台单测真实字符串形态。
+fn strip_verbatim_prefix(raw: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        Cow::Owned(format!(r"\\{rest}"))
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        Cow::Borrowed(rest)
+    } else {
+        Cow::Borrowed(raw)
+    }
+}
+
+/// 路径字符串 → file URL。`windows` 显式传入以便在任意平台单测 Windows 分支。
+fn path_to_file_url(raw: &str, windows: bool) -> String {
+    let normalized = if windows {
+        strip_verbatim_prefix(raw).replace('\\', "/")
+    } else {
+        raw.to_string()
+    };
+
+    let mut out = String::from("file:");
+    if normalized.starts_with("//") {
+        // UNC：\\server\share\x → file://server/share/x（不要再补斜杠）
+        out.push_str(&encode_url_path(&normalized));
+    } else if normalized.starts_with('/') {
+        // Unix 绝对路径：/a/b → file:///a/b（"file:" + "//" + "/a/b"）
+        out.push_str("//");
+        out.push_str(&encode_url_path(&normalized));
+    } else {
+        // Windows 盘符路径：C:/a/b → file:///C:/a/b（需补第三个斜杠）
+        out.push_str("///");
+        out.push_str(&encode_url_path(&normalized));
+    }
+    out
+}
+
+/// 保留 URL 路径中的安全字符，其余按字节做百分号编码。
+/// `:` 保留——盘符与 URI 端口都依赖它。
+fn encode_url_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
                 out.push(b as char)
             }
             other => out.push_str(&format!("%{other:02X}")),
@@ -216,6 +321,7 @@ fn run_cdp_print(
 pub fn generate_png(html_path: &str, png_path: &str) -> Result<(), MpeError> {
     let chrome = find_chrome()?;
     let abs_html = std::fs::canonicalize(html_path).map_err(MpeError::IoError)?;
+    let file_url = to_file_url(&abs_html);
 
     let output = Command::new(&chrome)
         .args([
@@ -227,7 +333,7 @@ pub fn generate_png(html_path: &str, png_path: &str) -> Result<(), MpeError> {
             "--force-device-scale-factor=2",
             "--window-size=1920,1080",
             &format!("--screenshot={}", png_path),
-            &format!("file://{}", abs_html.display()),
+            &file_url,
         ])
         .output()
         .map_err(MpeError::IoError)?;
@@ -257,10 +363,16 @@ pub fn open_pdf(pdf_path: &str) -> Result<(), MpeError> {
         .map_err(MpeError::IoError)?;
 
     #[cfg(target_os = "windows")]
-    let status = Command::new("cmd")
-        .args(["/c", "start", "", abs_pdf.to_str().unwrap_or("")])
-        .output()
-        .map_err(MpeError::IoError)?;
+    let status = {
+        // canonicalize 的 \\?\ 前缀会让 start 解析失败；空串是 start 的标题占位，
+        // 否则含空格的路径会被当成窗口标题。
+        let target = strip_verbatim_prefix(&abs_pdf.to_string_lossy()).to_string();
+        Command::new("cmd")
+            .args(["/c", "start", ""])
+            .arg(target)
+            .output()
+            .map_err(MpeError::IoError)?
+    };
 
     #[cfg(target_os = "linux")]
     let status = Command::new("xdg-open")
@@ -275,4 +387,83 @@ pub fn open_pdf(pdf_path: &str) -> Result<(), MpeError> {
         ))));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_url_unix绝对路径() {
+        assert_eq!(
+            path_to_file_url("/a/b-c_d.e~f/g.html", false),
+            "file:///a/b-c_d.e~f/g.html"
+        );
+    }
+
+    #[test]
+    fn file_url_中文与空格按字节编码() {
+        assert_eq!(
+            path_to_file_url("/tmp/01-架构 图.html", false),
+            "file:///tmp/01-%E6%9E%B6%E6%9E%84%20%E5%9B%BE.html"
+        );
+    }
+
+    /// Windows 盘符路径：反斜杠必须转正斜杠，且需要第三个斜杠，
+    /// 否则 `file://C:...` 会把 `C:` 解析成主机名，Chrome 直接拒绝加载。
+    #[test]
+    fn file_url_windows盘符路径() {
+        assert_eq!(
+            path_to_file_url(r"C:\Users\张三\文档\a b.png", true),
+            "file:///C:/Users/%E5%BC%A0%E4%B8%89/%E6%96%87%E6%A1%A3/a%20b.png"
+        );
+    }
+
+    #[test]
+    fn file_url_windows正斜杠路径同样可接受() {
+        assert_eq!(
+            path_to_file_url("C:/tmp/a.html", true),
+            "file:///C:/tmp/a.html"
+        );
+    }
+
+    /// UNC 共享：两个斜杠 + 主机名，不能补成三个斜杠
+    #[test]
+    fn file_url_windows_unc() {
+        assert_eq!(
+            path_to_file_url(r"\\server\share\a.html", true),
+            "file://server/share/a.html"
+        );
+    }
+
+    /// canonicalize 的 verbatim 前缀必须剥掉，否则盘符路径会被当成主机名
+    #[test]
+    fn file_url_剥离verbatim前缀() {
+        assert_eq!(
+            path_to_file_url(r"\\?\C:\tmp\a.html", true),
+            "file:///C:/tmp/a.html"
+        );
+        assert_eq!(
+            path_to_file_url(r"\\?\UNC\server\share\a.html", true),
+            "file://server/share/a.html"
+        );
+        // 非 verbatim 路径不受影响
+        assert_eq!(
+            path_to_file_url(r"C:\tmp\a.html", true),
+            "file:///C:/tmp/a.html"
+        );
+    }
+
+    #[test]
+    fn 候选路径均不依赖裸名spawn() {
+        // 回归：旧实现把 "chrome" / "msedge" 混在绝对路径候选里，
+        // 靠 `where` 判定，非 Windows 平台直接失效。
+        for c in CHROME_CANDIDATES {
+            assert!(!c.is_empty());
+        }
+        for n in CHROME_BIN_NAMES {
+            assert!(!n.contains('/'), "裸名列表不应含路径分隔符: {n}");
+            assert!(!n.contains('\\'), "裸名列表不应含路径分隔符: {n}");
+        }
+    }
 }

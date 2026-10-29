@@ -1165,13 +1165,21 @@ fn platform_copy_clipboard(text: &str) -> Result<(), String> {
 fn platform_copy_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    // X11 优先 xclip，Wayland 用 wl-copy
+    // X11 优先 xclip，Wayland 用 wl-copy。
+    // 走 resolve_binary 而非裸名 spawn：桌面环境下从图标启动的进程
+    // 未必继承完整 PATH（/usr/local/bin 等常缺席），裸名会 ENOENT。
     let cmds: [(&str, Vec<&str>); 2] = [
         ("xclip", vec!["-selection", "clipboard"]),
         ("wl-copy", vec![]),
     ];
     for (bin, args) in cmds {
-        let child = Command::new(bin).args(args).stdin(Stdio::piped()).spawn();
+        let Some(bin_path) = md2x_core::ext_diagram::resolve_binary(bin) else {
+            continue; // 未安装，尝试下一个
+        };
+        let child = Command::new(&bin_path)
+            .args(args)
+            .stdin(Stdio::piped())
+            .spawn();
         match child {
             Ok(mut c) => {
                 let ok = c
@@ -1185,7 +1193,7 @@ fn platform_copy_clipboard(text: &str) -> Result<(), String> {
                     return Ok(());
                 }
             }
-            Err(_) => continue, // 命令不存在，尝试下一个
+            Err(_) => continue, // 启动失败，尝试下一个
         }
     }
     Err("未找到 xclip 或 wl-copy，无法写入剪贴板".to_string())

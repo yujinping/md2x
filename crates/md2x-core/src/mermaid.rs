@@ -196,10 +196,7 @@ fn render_via_chrome(chrome: &str, sources: &[String]) -> Option<Vec<DiagramResu
     let harness = build_harness(&diagrams_json);
     let harness_path = tmp.join("mermaid-harness.html");
     std::fs::write(&harness_path, harness).ok()?;
-    let url = format!(
-        "file://{}",
-        std::fs::canonicalize(&harness_path).ok()?.display()
-    );
+    let url = crate::chrome::to_file_url(&std::fs::canonicalize(&harness_path).ok()?);
 
     // 最多重试两次：虚拟时间预算内未渲染完（`data-status` 缺失）时再给更大预算。
     let mut budget = VIRTUAL_TIME_BUDGET;
