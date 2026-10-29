@@ -2112,6 +2112,7 @@ name = "md2x-core"
 version = "0.8.0"
 dependencies = [
  "comrak",
+ "flate2",
  "regex",
  "serde",
  "serde_json",

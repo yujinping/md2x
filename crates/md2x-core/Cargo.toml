@@ -12,6 +12,8 @@ zip = "8.6.0"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# gzip 解压内嵌的 mermaid/ELK 资源；纯 Rust 后端，不引入系统 zlib 依赖
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [lib]
 name = "md2x_core"

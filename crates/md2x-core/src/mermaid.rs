@@ -32,13 +32,27 @@ const MERMAID_PREFIX: &[&str] = &[
     "flowchart", "graph", "statediagram", "classdiagram", "erdiagram", "sequencediagram", "c4",
 ];
 
-/// 内置的 mermaid UMD 构建（离线可用，编译进二进制）。
-const MERMAID_JS: &str = include_str!("../../../templates/assets/mermaid.min.js");
+/// 内置的 mermaid UMD 构建，gzip 压缩内嵌（解压后约 3.5MB，压缩后 0.93MB）。
+/// 源为 mermaid 11.16.1 UMD；重新生成：gzip -9 mermaid.min.js
+const MERMAID_JS_GZ: &[u8] = include_bytes!("../../../templates/assets/mermaid.min.js.gz");
 
-/// 内置的 ELK 布局器 bundle：@mermaid-js/layout-elk@0.2.3（peer mermaid ^11），
-/// esbuild 打成 IIFE、mermaid 置为全局外部依赖；加载时自动 registerLayoutLoaders
-/// 并置 window.__md2xElkReady。编译进二进制，离线可用。
-const MERMAID_ELK_JS: &str = include_str!("../../../templates/assets/mermaid-layout-elk.min.js");
+/// 内置的 ELK 布局器 bundle，gzip 压缩内嵌（解压后约 4.8MB，压缩后 1.37MB）。
+/// 源为 @mermaid-js/layout-elk@0.2.3（peer mermaid ^11），esbuild 打成 IIFE、
+/// mermaid 置为全局外部依赖；加载时自动 registerLayoutLoaders 并置 window.__md2xElkReady。
+/// 重新生成：esbuild entry.js --bundle --minify --format=iife --external:mermaid 后 gzip -9
+const MERMAID_ELK_JS_GZ: &[u8] =
+    include_bytes!("../../../templates/assets/mermaid-layout-elk.min.js.gz");
+
+/// 解压内嵌的 gzip 资源：纯内存操作（二进制只读段 → 堆上 Vec），
+/// 仅在临时目录缺文件时调用，无磁盘中间产物。
+fn gunzip(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(data.len() * 4);
+    flate2::read::GzDecoder::new(data)
+        .read_to_end(&mut out)
+        .ok()?;
+    Some(out)
+}
 
 /// Chrome dump-dom 一次渲染的虚拟时间预算（毫秒）。
 const VIRTUAL_TIME_BUDGET: u64 = 20000;
@@ -166,14 +180,16 @@ fn render_via_chrome(chrome: &str, sources: &[String]) -> Option<Vec<DiagramResu
     let tmp = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&tmp).ok()?;
 
-    // 写出内置 mermaid 库与 ELK 布局器（仅首次）
+    // 写出内置 mermaid 库与 ELK 布局器（仅首次；解压在内存中完成）
     let mermaid_path = tmp.join("mermaid.min.js");
     if !mermaid_path.exists() {
-        std::fs::write(&mermaid_path, MERMAID_JS).ok()?;
+        let js = gunzip(MERMAID_JS_GZ)?;
+        std::fs::write(&mermaid_path, js).ok()?;
     }
     let elk_path = tmp.join("mermaid-layout-elk.min.js");
     if !elk_path.exists() {
-        std::fs::write(&elk_path, MERMAID_ELK_JS).ok()?;
+        let js = gunzip(MERMAID_ELK_JS_GZ)?;
+        std::fs::write(&elk_path, js).ok()?;
     }
 
     let diagrams_json = serde_json::to_string(sources).ok()?;
@@ -371,6 +387,36 @@ pub fn render_mermaid_svg_from(lang: &str, literal: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gzip数据解压还原() {
+        // 用 flate2 自压缩一段数据再解压，验证 gunzip 往返正确
+        let mut enc = flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        );
+        std::io::Write::write_all(&mut enc, b"<script>const x = 1;</script>").unwrap();
+        let compressed = enc.finish().unwrap();
+        let out = gunzip(&compressed).unwrap();
+        assert_eq!(out, b"<script>const x = 1;</script>");
+    }
+
+    #[test]
+    fn 非法gzip数据返回none() {
+        assert!(gunzip(b"not gzip data at all").is_none());
+    }
+
+    #[test]
+    fn 内嵌资源gzip完好可解压() {
+        // 直接解压编译进二进制的资源，保证随包 gzip 文件未损坏
+        let mermaid = gunzip(MERMAID_JS_GZ).unwrap();
+        assert!(mermaid.len() > 1_000_000, "mermaid UMD 解压后应有数 MB");
+        let mermaid = String::from_utf8_lossy(&mermaid);
+        assert!(mermaid.contains("esbuild_esm_mermaid"), "应为 mermaid UMD 文本");
+        let elk = gunzip(MERMAID_ELK_JS_GZ).unwrap();
+        assert!(elk.len() > 1_000_000, "ELK bundle 解压后应有数 MB");
+        assert!(String::from_utf8_lossy(&elk).contains("registerLayoutLoaders"));
+    }
 
     #[test]
     fn detects_alias_languages() {
