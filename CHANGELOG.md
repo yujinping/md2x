@@ -1,4 +1,4 @@
-## [unreleased]
+## [1.0.0] - 2026-10-29
 
 ### 🚀 Features
 
@@ -19,6 +19,7 @@
 ### ⚙️ Miscellaneous Tasks
 
 - CHANGELOG 版本段落间补空行
+- Release v1.0.0
 ## [0.8.0] - 2026-10-06
 
 ### 🚀 Features
