@@ -89,6 +89,11 @@ PY
     while IFS= read -r f; do
         [ -n "$f" ] && VERSION_FILES+=("$f")
     done < <(find . -name tauri.conf.json -not -path './.git/*' -not -path './target/*' -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' || true)
+    # 前端 package.json 同样带版本号：不一起 bump 会与后端长期错位，
+    # 排查问题时容易误判手上跑的是哪个版本
+    for f in frontend/package.json package.json; do
+        [ -f "$f" ] && VERSION_FILES+=("$f")
+    done
 }
 detect_version_files
 
