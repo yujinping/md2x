@@ -12,6 +12,7 @@
 
 - 将 0.7.0 变更归入版本段落
 - 补充无 JS 降级说明
+
 ## [0.7.0] - 2026-10-06
 
 ### 🚀 Features
@@ -21,12 +22,14 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.7.0
+
 ## [0.6.1] - 2026-09-09
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(md2x-gui)* 更新应用图标资源
 - Release v0.6.1
+
 ## [0.6.0] - 2026-09-09
 
 ### 🚀 Features
@@ -37,23 +40,27 @@
 
 - Add LICENSE.
 - Release v0.6.0
+
 ## [0.2.3] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* 新增 macOS 单架构 dmg 构建并优化产物命名
 - Release v0.2.3
+
 ## [0.2.1] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(icons)* 更新应用图标
 - Release v0.2.1
+
 ## [0.4.1] - 2026-08-13
 
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.4.1
+
 ## [0.4.0] - 2026-08-13
 
 ### 🚀 Features
@@ -67,6 +74,7 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.4.0
+
 ## [0.3.1] - 2026-08-12
 
 ### 🚀 Features
@@ -83,6 +91,7 @@
 - *(ci)* 升级 Actions 依赖与 pnpm 版本
 - *(release)* 升级版本至 0.3.0
 - Release v0.3.1
+
 ## [0.2.0] - 2026-08-08
 
 ### 🚀 Features
@@ -121,6 +130,7 @@
 ### ◀️ Revert
 
 - *(core)* 撤销代码块圆角文本框，保留段落底纹与文字内边距
+
 ## [0.1.7] - 2026-08-07
 
 ### 🚀 Features
