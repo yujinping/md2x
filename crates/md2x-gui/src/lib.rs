@@ -2,7 +2,7 @@ use md2x_core::aggregate;
 use md2x_core::chrome;
 use md2x_core::converter;
 use md2x_core::error::MpeError;
-use md2x_core::template;
+use md2x_core::{ext_diagram, template};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -301,6 +301,7 @@ pub fn run() {
             register_default_md_handler,
             list_templates,
             open_templates_dir,
+            check_external_tools,
         ])
         .build(tauri::generate_context!())
         .expect("error")
@@ -814,6 +815,15 @@ fn open_templates_dir(app: tauri::AppHandle) -> Result<(), String> {
     let ok = std::process::Command::new("xdg-open").arg(&dir).status();
     ok.map_err(|e| format!("打开目录失败: {e}"))?;
     Ok(())
+}
+
+/// 检测外部图表 CLI（d2 / dot）安装状态，供设置面板展示「装了即用」的功能可用性。
+#[tauri::command]
+fn check_external_tools() -> Vec<ext_diagram::ToolStatus> {
+    ext_diagram::EXT_TOOLS
+        .iter()
+        .map(ext_diagram::check_tool)
+        .collect()
 }
 
 /// 导出 HTML 到用户指定位置

@@ -48,6 +48,7 @@ onMounted(async () => {
     platform.value = await invoke('get_platform')
   } catch (_) {}
   loadTemplates()
+  loadExtTools()
 })
 
 const viewModes = [
@@ -83,6 +84,15 @@ const templateMissing = computed(() =>
   templates.value.length > 0 &&
   !templates.value.some(t => t.id === settings.templateId)
 )
+
+// ===== 外部图表工具状态 =====
+// d2 / dot 图表块依赖外部 CLI，未装时静默降级保留代码块。
+// 这里把检测结果亮出来，让人知道这个功能存在、装了依赖即生效。
+const extTools = ref([])
+
+async function loadExtTools() {
+  try { extTools.value = await invoke('check_external_tools') } catch (_) {}
+}
 
 function onOverlayClick(e) {
   if (e.target === e.currentTarget) emit('close')
@@ -272,6 +282,53 @@ async function setDefault() {
           <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
           <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
           <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
+        </div>
+
+        <!-- Divider -->
+        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+        <!-- External diagram tools -->
+        <div class="mb-6">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsExtTools', settings.lang) }}</div>
+            <button
+              class="w-7 h-7 rounded-lg border flex items-center justify-center cursor-pointer"
+              :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
+              :title="t('btnRefreshList', settings.lang)"
+              @click="loadExtTools"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
+              </svg>
+            </button>
+          </div>
+          <div class="flex flex-col gap-2">
+            <div
+              v-for="tool in extTools"
+              :key="tool.id"
+              class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl"
+              :style="{ border: '1.5px solid var(--border)' }"
+            >
+              <span
+                class="w-2 h-2 rounded-full flex-shrink-0"
+                :style="{ background: tool.installed ? 'var(--accent)' : 'var(--text-dim)' }"
+              ></span>
+              <div class="flex flex-col items-start min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-[13px] font-semibold font-mono" :style="{ color: 'var(--text)' }">{{ tool.id }}</span>
+                  <span
+                    class="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                    :style="tool.installed
+                      ? { background: 'rgba(99,102,241,0.12)', color: 'var(--accent)' }
+                      : { background: 'rgba(150,150,150,0.15)', color: 'var(--text-dim)' }"
+                  >{{ tool.installed ? (tool.version || t('toolInstalled', settings.lang)) : t('toolMissing', settings.lang) }}</span>
+                </div>
+                <span class="text-[11px] leading-snug" :style="{ color: 'var(--text-dim)' }">{{ t('tool_' + tool.id + '_desc', settings.lang) }}</span>
+                <span v-if="!tool.installed" class="text-[11px] font-mono leading-snug" :style="{ color: 'var(--amber)' }">{{ t('tool_' + tool.id + '_install', settings.lang) }}</span>
+              </div>
+            </div>
+          </div>
+          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('extToolsNote', settings.lang) }}</p>
         </div>
 
         <!-- Divider -->

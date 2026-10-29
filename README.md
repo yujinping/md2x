@@ -63,6 +63,7 @@ cd .. && cargo run -p md2x-gui
 - **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
 - **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
 - **HTML 模板**：预览与导出使用同一套模板；内置默认模板之外，把含 `{{BODY}}` 占位符的 `.html` 文件放入模板目录（设置 → 打开模板目录）即可在设置中选用，CLI 用 `--template <文件>` 指定
+- **外部图表引擎**：```d2 / ```dot / ```graphviz 代码块由外部 CLI（[D2](https://d2lang.com) / [Graphviz](https://graphviz.org)）在转换期烘焙为内嵌 SVG，设置面板可查看安装状态，装上即用；未安装时保留代码块不报错
 - **默认打开程序**：设置中一键把 `.md` 关联到 md2x（Windows 写注册表、macOS 写 LaunchServices、Linux 使用 xdg-mime），双击 Markdown 文件即可用 md2x 打开
 
 ### 自定义 HTML 模板
@@ -95,6 +96,9 @@ Markdown → comrak → HTML → 模板渲染
 > mermaid 图表在转换期经 headless Chrome 一次性烘焙为内嵌 SVG，布局引擎默认
 > ELK（分层布局，边交叉更少）；ELK 不可用时自动回落 dagre，单个图渲染失败
 > 保留原始代码块，不中断导出。
+>
+> d2 / dot 图表依赖外部 CLI（d2、graphviz），在 PATH 中检出即自动启用；
+> 未安装或渲染失败同样降级保留代码块。GUI 设置面板展示各 CLI 的安装状态。
 
 > DOCX 输出的标题使用 Word 标题样式，打开后左侧导航窗格即可看到目录；正文排版
 > （字体、字号、行距、表格、代码高亮、图片等）与 HTML 预览保持一致。
