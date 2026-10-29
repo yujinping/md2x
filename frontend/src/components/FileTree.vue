@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import FileTreeNode from './FileTreeNode.vue'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
@@ -60,17 +61,34 @@ function collapseAll() {
   persistExpanded()
 }
 
-// ==================== 右键菜单：复制相对路径 ====================
-// 单一菜单实例：所有节点右键仅冒泡位置信息，由本组件统一渲染，避免递归组件内多处挂载
-const ctxMenu = reactive({ visible: false, x: 0, y: 0, path: '', name: '' })
+// ==================== 右键菜单：复制路径 ====================
+// 单一菜单实例：所有节点右键仅冒泡位置信息，由本组件统一渲染，避免递归组件内多处挂载。
+// 菜单含两项：① 相对当前打开文件夹的路径（始终可用）
+//            ② 相对所在 git 仓库的路径（仅节点位于仓库内时出现）
+const ctxMenu = reactive({ visible: false, x: 0, y: 0, path: '', name: '', repoRel: '' })
 
-function onNodeContextMenu(info) {
+// 菜单以两项为上限估算高度，为保证空间稳定不随异步结果跳动，统一按最大高度预留
+const CTX_MENU_MAX_H = 76
+const CTX_MENU_W = 220
+
+async function onNodeContextMenu(info) {
   // 预留菜单尺寸做边缘回退，避免贴边溢出窗口
-  ctxMenu.visible = true
-  ctxMenu.x = Math.min(info.x, window.innerWidth - 170)
-  ctxMenu.y = Math.min(info.y, window.innerHeight - 60)
   ctxMenu.path = info.path
   ctxMenu.name = info.path.replace(/\\/g, '/').split('/').pop() || info.path
+  ctxMenu.repoRel = ''
+  ctxMenu.x = Math.min(info.x, window.innerWidth - CTX_MENU_W)
+  ctxMenu.y = Math.min(info.y, window.innerHeight - CTX_MENU_MAX_H)
+  ctxMenu.visible = true
+
+  // 异步补充仓库相对路径：不在任何 git 仓库内时 invoke 返回 null，届时该项不渲染
+  const target = info.path
+  try {
+    const rel = await invoke('repo_relative_path', { path: target })
+    // 期间若菜单已关闭或已切换到别的节点，丢弃这次结果
+    if (rel && ctxMenu.visible && ctxMenu.path === target) ctxMenu.repoRel = rel
+  } catch (_) {
+    /* 后端命令不可用（如浏览器调试模式）时静默降级，仅保留相对路径项 */
+  }
 }
 
 function closeCtxMenu() {
@@ -108,6 +126,20 @@ async function copyText(text) {
 
 async function copyRelPath() {
   await copyText(ctxRelPath.value)
+  closeCtxMenu()
+}
+
+// 复制仓库相对路径（含仓库名，形如 md2x/crates/md2x-gui/src/lib.rs）。
+// 后端 copy_text 直接写系统剪贴板：Webview 的 Clipboard API 在非 https 上下文下不可靠，
+// 因此此项走后端命令，与相对路径项的纯前端兜底路径互补。
+async function copyRepoRelPath() {
+  if (!ctxMenu.repoRel) return
+  try {
+    await invoke('copy_text', { text: ctxMenu.repoRel })
+  } catch (_) {
+    /* 后端不可用时退回前端兜底复制 */
+    await copyText(ctxMenu.repoRel)
+  }
   closeCtxMenu()
 }
 
@@ -243,7 +275,7 @@ function openFile(path) {
       >{{ t('treeNoMarkdown', settings.lang) }}</div>
     </div>
 
-    <!-- 右键菜单：复制相对路径 -->
+<!-- 右键菜单：路径复制（相对当前文件夹 / 相对 git 仓库） -->
     <Teleport to="body">
       <div
         v-if="ctxMenu.visible"
@@ -267,6 +299,20 @@ function openFile(path) {
             <path d="M10.5 5.5V3a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.5" />
           </svg>
           {{ t('treeCopyRelPath', settings.lang) }}
+        </button>
+        <!-- 仓库相对路径：仅当节点位于 git 仓库内时出现（后端返回 null 则不渲染） -->
+        <button
+          v-if="ctxMenu.repoRel"
+          class="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] border-none cursor-pointer text-left transition-colors duration-100 hover:opacity-80"
+          :style="{ background: 'transparent', color: 'var(--text)' }"
+          :title="ctxMenu.repoRel"
+          @click.stop="copyRepoRelPath"
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--text-muted)">
+            <rect x="5.5" y="5.5" width="9" height="9" rx="1.5" />
+            <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5v5A1.5 1.5 0 0 0 4 10h1.5" />
+          </svg>
+          {{ t('ctxCopyRepoRelPath', settings.lang) }}
         </button>
       </div>
     </Teleport>

@@ -302,6 +302,8 @@ pub fn run() {
             list_templates,
             open_templates_dir,
             check_external_tools,
+            repo_relative_path,
+            copy_text,
         ])
         .build(tauri::generate_context!())
         .expect("error")
@@ -1073,6 +1075,122 @@ fn normalize_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
+// ==================== Git 仓库相对路径 ====================
+
+/// 向上逐级查找包含 .git 的祖先目录，返回（仓库根目录, 仓库目录名）
+/// 兼容 .git 为目录（普通仓库）或文件（worktree / submodule）两种形态
+fn find_git_root(p: &Path) -> Option<(PathBuf, String)> {
+    let mut cur = Some(p);
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            let name = dir.file_name()?.to_string_lossy().into_owned();
+            return Some((dir.to_path_buf(), name));
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// 计算路径相对其所在 git 仓库根的路径，含仓库名前缀：`repo/docs/a.md`
+/// 不在任何仓库内时返回 None
+fn repo_relative_label(path: &Path) -> Option<String> {
+    let (root, name) = find_git_root(path)?;
+    let rel = path.strip_prefix(&root).ok()?;
+    let mut parts: Vec<String> = vec![name];
+    for c in rel.components() {
+        parts.push(c.as_os_str().to_string_lossy().into_owned());
+    }
+    Some(parts.join("/"))
+}
+
+/// 查询文件是否位于 git 仓库内，是则返回含仓库名的相对路径（前端右键菜单判定用）
+#[tauri::command]
+fn repo_relative_path(path: String) -> Option<String> {
+    repo_relative_label(Path::new(&path))
+}
+
+/// 将文本写入系统剪贴板（macOS: pbcopy / Windows: Set-Clipboard / Linux: xclip 或 wl-copy）
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    platform_copy_clipboard(&text)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_copy_clipboard(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 pbcopy 失败: {e}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "无法写入 pbcopy".to_string())?
+        .write_all(text.as_bytes())
+        .map_err(|e| format!("写入剪贴板失败: {e}"))?;
+    let st = child.wait().map_err(|e| e.to_string())?;
+    if st.success() {
+        Ok(())
+    } else {
+        Err("pbcopy 执行失败".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_copy_clipboard(text: &str) -> Result<(), String> {
+    // 通过带 BOM 的 UTF-8 临时文件中转，规避 clip.exe / PowerShell 管道的代码页乱码
+    let tmp = std::env::temp_dir().join("md2x-clip.txt");
+    std::fs::write(&tmp, format!("\u{feff}{text}")).map_err(|e| format!("写临时文件失败: {e}"))?;
+    let script = format!(
+        "Set-Clipboard -Value (Get-Content -Raw -Encoding UTF8 \"{}\")",
+        tmp.to_string_lossy().replace('"', "`\"")
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .map_err(|e| format!("启动 PowerShell 失败: {e}"))?;
+    let _ = std::fs::remove_file(&tmp);
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "写入剪贴板失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn platform_copy_clipboard(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    // X11 优先 xclip，Wayland 用 wl-copy
+    let cmds: [(&str, Vec<&str>); 2] = [
+        ("xclip", vec!["-selection", "clipboard"]),
+        ("wl-copy", vec![]),
+    ];
+    for (bin, args) in cmds {
+        let child = Command::new(bin).args(args).stdin(Stdio::piped()).spawn();
+        match child {
+            Ok(mut c) => {
+                let ok = c
+                    .stdin
+                    .take()
+                    .ok_or_else(|| "无法写入子进程".to_string())?
+                    .write_all(text.as_bytes())
+                    .is_ok()
+                    && c.wait().map(|s| s.success()).unwrap_or(false);
+                if ok {
+                    return Ok(());
+                }
+            }
+            Err(_) => continue, // 命令不存在，尝试下一个
+        }
+    }
+    Err("未找到 xclip 或 wl-copy，无法写入剪贴板".to_string())
+}
+
 // ==================== 默认打开程序 ====================
 
 /// 将本应用注册为 .md 文件的默认打开程序（当前用户级）
@@ -1276,5 +1394,36 @@ mod tests {
         assert!(!tree[0].path.contains('\\'));
 
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 向上查找 .git 根：相对路径含仓库名前缀；仓库外返回 None
+    #[test]
+    fn repo_relative_label_walks_up_to_git_root() {
+        let base = std::env::temp_dir().join(format!("md2x-repo-test-{}", std::process::id()));
+        let repo = base.join("my-repo");
+        let sub = repo.join("docs/guide");
+        std::fs::create_dir_all(&sub).unwrap();
+        // 仅创建 .git 目录即可判定为仓库根（无需真实 git 元数据）
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(sub.join("a.md"), "# a").unwrap();
+
+        let f = sub.join("a.md");
+        assert_eq!(
+            repo_relative_label(&f).as_deref(),
+            Some("my-repo/docs/guide/a.md")
+        );
+        // .git 为文件（worktree 形态）同样判定
+        let wt = base.join("wt-repo/nested");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(base.join("wt-repo/.git"), "gitdir: /somewhere").unwrap();
+        std::fs::write(wt.join("b.md"), "# b").unwrap();
+        assert_eq!(
+            repo_relative_label(&wt.join("b.md")).as_deref(),
+            Some("wt-repo/nested/b.md")
+        );
+        // 仓库外的文件返回 None
+        assert_eq!(repo_relative_label(&base.join("outside.md")), None);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
