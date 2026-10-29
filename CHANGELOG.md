@@ -2,6 +2,27 @@
 
 ### 🚀 Features
 
+- *(gui)* 渲染视图页内查找，⌘/Ctrl+F 高亮跳转
+- *(template)* 可选 HTML 模板，预览与导出共用，支持外置模板
+- *(mermaid)* 图表布局引擎切换为 ELK，分层布局减少边交叉
+- *(diagram)* D2 / graphviz 外部 CLI 图表渲染
+- *(gui)* 设置面板展示外部图表工具安装状态
+
+### ⚡ Performance
+
+- *(mermaid)* 内嵌资源 gzip 压缩，二进制瘦身 6.2MB
+
+### 🎨 Styling
+
+- 清理 clippy 告警（div_ceil、strip_prefix、冗余 clone 等）
+
+### ⚙️ Miscellaneous Tasks
+
+- CHANGELOG 版本段落间补空行
+## [0.8.0] - 2026-10-06
+
+### 🚀 Features
+
 - *(aggregate)* 目录聚合导出，跨文档锚点与链接重写
 - *(theme)* 导出与预览统一支持浅色/暗色双主题
 - *(export)* PDF 书签树与 DOCX 目录域
@@ -13,6 +34,9 @@
 - 将 0.7.0 变更归入版本段落
 - 补充无 JS 降级说明
 
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.8.0
 ## [0.7.0] - 2026-10-06
 
 ### 🚀 Features
@@ -22,14 +46,12 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.7.0
-
 ## [0.6.1] - 2026-09-09
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(md2x-gui)* 更新应用图标资源
 - Release v0.6.1
-
 ## [0.6.0] - 2026-09-09
 
 ### 🚀 Features
@@ -40,27 +62,23 @@
 
 - Add LICENSE.
 - Release v0.6.0
-
 ## [0.2.3] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* 新增 macOS 单架构 dmg 构建并优化产物命名
 - Release v0.2.3
-
 ## [0.2.1] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(icons)* 更新应用图标
 - Release v0.2.1
-
 ## [0.4.1] - 2026-08-13
 
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.4.1
-
 ## [0.4.0] - 2026-08-13
 
 ### 🚀 Features
@@ -74,7 +92,6 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.4.0
-
 ## [0.3.1] - 2026-08-12
 
 ### 🚀 Features
@@ -91,7 +108,6 @@
 - *(ci)* 升级 Actions 依赖与 pnpm 版本
 - *(release)* 升级版本至 0.3.0
 - Release v0.3.1
-
 ## [0.2.0] - 2026-08-08
 
 ### 🚀 Features
@@ -130,7 +146,6 @@
 ### ◀️ Revert
 
 - *(core)* 撤销代码块圆角文本框，保留段落底纹与文字内边距
-
 ## [0.1.7] - 2026-08-07
 
 ### 🚀 Features
