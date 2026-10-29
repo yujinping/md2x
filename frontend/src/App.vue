@@ -10,6 +10,8 @@ import AboutDialog from './components/AboutDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import PdfOverlay from './components/PdfOverlay.vue'
 import FileTree from './components/FileTree.vue'
+import FindBar from './components/FindBar.vue'
+import { injectFindRuntime } from './find-runtime.js'
 
 const settings = useSettingsStore()
 const previewState = ref(null)
@@ -35,6 +37,50 @@ const folderName = computed(() => {
   const i = p.lastIndexOf('/')
   return i >= 0 ? p.slice(i + 1) : p || folderPath.value
 })
+
+// ===== 页内查找（作用于渲染视图 iframe） =====
+const showFind = ref(false)
+const findTotal = ref(0)
+const findIndex = ref(0)
+const previewFrame = ref(null)
+let findTimer = null
+
+/// 查找能力仅适用于 HTML 预览：PDF 视图是插件渲染的位图，无法遍历 DOM
+const canFind = computed(() => hasFile.value && !isPdfView.value && typeof previewState.value === 'string')
+
+function sendFind(action, query) {
+  const win = previewFrame.value && previewFrame.value.contentWindow
+  if (!win) return
+  try {
+    win.postMessage({ type: 'md2x-find', action, query: query || '' }, '*')
+  } catch (_) {}
+}
+
+function openFind() {
+  if (!canFind.value) return
+  showFind.value = true
+}
+
+function closeFind() {
+  const wasOpen = showFind.value
+  showFind.value = false
+  findTotal.value = 0
+  findIndex.value = 0
+  if (findTimer) {
+    clearTimeout(findTimer)
+    findTimer = null
+  }
+  if (wasOpen) sendFind('clear')
+}
+
+/// 输入即搜：短延时合并连续按键，避免大文档频繁重建 DOM
+function onFindSearch(query) {
+  if (findTimer) clearTimeout(findTimer)
+  findTimer = setTimeout(() => {
+    findTimer = null
+    sendFind('search', query)
+  }, 120)
+}
 
 function setStatus(msg, type) {
   statusText.value = t(msg, settings.lang)
@@ -103,6 +149,8 @@ async function loadPreview() {
   }
   isPdfView.value = false
   hasFile.value = true
+  // 预览即将重建，旧 iframe 内的高亮随文档一起丢弃
+  closeFind()
 
   // Read HTML into srcdoc
   let html = ''
@@ -118,7 +166,7 @@ async function loadPreview() {
     setStatus(e.toString(), 'error')
     return
   }
-  previewState.value = injectLinkHandler(applyFullWidth(html))
+  previewState.value = injectFindRuntime(injectLinkHandler(applyFullWidth(html)))
 
   try {
     const n = await invoke('get_file_name')
@@ -209,8 +257,16 @@ async function resolveAndOpen(href) {
 
 function onIframeMessage(e) {
   const data = e.data
-  if (!data || data.type !== 'md2x-link') return
-  resolveAndOpen(data.href)
+  if (!data || !data.type) return
+  if (data.type === 'md2x-link') {
+    resolveAndOpen(data.href)
+  } else if (data.type === 'md2x-find-open') {
+    // 焦点在正文内时按 ⌘/Ctrl+F，由 iframe 转交父窗口弹出查找栏
+    openFind()
+  } else if (data.type === 'md2x-find-result') {
+    findTotal.value = data.total || 0
+    findIndex.value = data.index || 0
+  }
 }
 
 async function onExportPdf() {
@@ -574,9 +630,12 @@ onMounted(async () => {
   }).catch(() => {})
   setStatus('statusReady', 'ready')
 
-  // 键盘快捷键：Cmd+O 打开文件（打开文件夹由菜单 Cmd/Ctrl+Shift+O 触发）；Alt+← / Alt+→ 前进后退
+  // 键盘快捷键：Cmd+O 打开文件（打开文件夹由菜单 Cmd/Ctrl+Shift+O 触发）；Alt+← / Alt+→ 前进后退；Cmd+F 页内查找
   window.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'o' && !e.shiftKey) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'f' && !e.shiftKey) {
+      e.preventDefault()
+      openFind()
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'o' && !e.shiftKey) {
       e.preventDefault()
       onOpenFile()
     } else if (e.altKey && e.key === 'ArrowLeft') {
@@ -600,6 +659,8 @@ onMounted(async () => {
       :can-go-forward="canGoForward"
       :folder-open="isFolderView && !!folderTree"
       :file-tree-visible="fileTreeVisible"
+      :can-find="canFind"
+      @toggle-find="showFind ? closeFind() : openFind()"
       @open-file="onOpenFile"
       @open-folder="onOpenFolder"
       @export-pdf="onExportPdf"
@@ -638,6 +699,7 @@ onMounted(async () => {
 
         <iframe
           v-if="hasFile && !isPdfView && previewState"
+          ref="previewFrame"
           :srcdoc="typeof previewState === 'string' ? previewState : ''"
           class="w-full h-full border-none block"
         />
@@ -646,6 +708,15 @@ onMounted(async () => {
           v-if="hasFile && isPdfView && previewState && typeof previewState !== 'string'"
           :src="'data:application/pdf;base64,' + previewState.base64"
           class="w-full h-full border-none block"
+        />
+        <FindBar
+          v-if="showFind"
+          :total="findTotal"
+          :index="findIndex"
+          @search="onFindSearch"
+          @next="sendFind('next')"
+          @prev="sendFind('prev')"
+          @close="closeFind"
         />
       </main>
     </div>

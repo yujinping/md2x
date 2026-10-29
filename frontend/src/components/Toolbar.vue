@@ -12,14 +12,16 @@ const props = defineProps({
   canGoForward: Boolean,
   folderOpen: Boolean,
   fileTreeVisible: Boolean,
+  canFind: Boolean,
 })
-const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'export-folder', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree'])
+const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'export-folder', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree', 'toggle-find'])
 const settings = useSettingsStore()
 // 文件夹聚合导出仅在文件夹视图下可用（需要整个目录作为输入）
 const hasFolder = computed(() => props.folderOpen)
 // 当前打开的下拉菜单：'' | 'open' | 'export'（互斥，同一时刻只开一个）
 const menu = ref('')
 const modifier = ref('⌘')
+const macKey = ref(true)
 
 function toggleMenu(name) {
   menu.value = menu.value === name ? '' : name
@@ -43,13 +45,14 @@ function onClickOutside(e) {
 
 onMounted(async () => {
   document.addEventListener('click', onClickOutside)
-  let isMac = false
+  let mac = false
   try {
-    isMac = (await invoke('get_platform')) === 'macos'
+    mac = (await invoke('get_platform')) === 'macos'
   } catch (_) {
-    isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+    mac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
   }
-  modifier.value = isMac ? '⌘' : 'Ctrl'
+  macKey.value = mac
+  modifier.value = mac ? '⌘' : 'Ctrl'
 })
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 
@@ -94,6 +97,16 @@ function onToggleFullWidth() {
       <!-- 全宽显示切换 -->
       <button class="btn btn-icon" :class="{ 'btn-active': settings.fullWidth }" :title="t('btnFullWidth', settings.lang)" @click="onToggleFullWidth">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M3 6V3h3"/><path d="M13 6V3h-3"/><path d="M3 10v3h3"/><path d="M13 10v3h-3"/></svg>
+      </button>
+
+      <!-- 页内查找（⌘/Ctrl+F） -->
+      <button
+        class="btn btn-icon"
+        :disabled="!canFind"
+        :title="t(macKey ? 'findHintMac' : 'findHintWin', settings.lang)"
+        @click="emit('toggle-find')"
+      >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L14 14"/></svg>
       </button>
 
       <!-- 文件树显示/隐藏（目录式切换；打开文件夹后出现） -->
