@@ -43,6 +43,68 @@ const THEME_OPTIONS = [
   }
 ]
 
+// ===== 选项卡 =====
+// 左侧是分类导航，右侧只渲染当前分类的设置，避免一屏堆满所有选项。
+// 分类按「改动频率/心智模型」划分：外观（看一看）、视图（读文件时）、
+// 导出（产出时）、图表（写图时）、关联（装环境时）。
+const TABS = [
+  {
+    id: 'appearance',
+    labelKey: 'settingsTabAppearance',
+    // 太阳：主题/语言这类观感设置
+    icon: 'M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M2.9 2.9l1.15 1.15M11.95 11.95l1.15 1.15M2.9 13.1l1.15-1.15M11.95 4.05l1.15-1.15',
+  },
+  {
+    id: 'view',
+    labelKey: 'settingsTabView',
+    // 侧栏布局：默认视图设置
+    icon: 'M1.8 3.3h12.4v9.4H1.8zM5.8 3.3v9.4',
+  },
+  {
+    id: 'export',
+    labelKey: 'settingsTabExport',
+    // 导出箭头：模板与产出
+    icon: 'M8 1.8v8.2M5 7.2l3 3 3-3M2.6 11.6v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-1.6',
+  },
+  {
+    id: 'diagrams',
+    labelKey: 'settingsTabDiagrams',
+    // 流程图节点：图表渲染能力
+    icon: 'M1.8 2.6h5v3.2h-5zM9.2 10.2h5v3.2h-5zM4.3 5.8v3.6a1 1 0 0 0 1 1h3.9',
+  },
+  {
+    id: 'associate',
+    labelKey: 'settingsTabAssociate',
+    // 链环：文件关联/外部集成
+    icon: 'M6.5 9.5a2.4 2.4 0 0 0 3.4 0l1.9-1.9a2.4 2.4 0 0 0-3.4-3.4l-.9.9M9.5 6.5a2.4 2.4 0 0 0-3.4 0L4.2 8.4a2.4 2.4 0 0 0 3.4 3.4l.9-.9',
+  },
+]
+const activeTab = ref('appearance')
+
+// ===== 内置图表渲染能力 =====
+// 与后端 mermaid.rs 支持的围栏语言一致（`flowchart`、`sequenceDiagram` 等可直接当代码块语言）。
+// 标签直接成对写在这里，不再过 i18n 表——这些是图表类型的专有名词，
+// 掺进通用文案表反而不好维护。
+const BUILTIN_DIAGRAMS = [
+  { lang: 'flowchart', zh: '流程图', en: 'Flowchart' },
+  { lang: 'sequenceDiagram', zh: '时序图', en: 'Sequence' },
+  { lang: 'classDiagram', zh: '类图', en: 'Class' },
+  { lang: 'stateDiagram', zh: '状态图', en: 'State' },
+  { lang: 'erDiagram', zh: 'ER 图', en: 'ER diagram' },
+  { lang: 'gantt', zh: '甘特图', en: 'Gantt' },
+  { lang: 'pie', zh: '饼图', en: 'Pie' },
+  { lang: 'journey', zh: '用户旅程', en: 'Journey' },
+  { lang: 'gitgraph', zh: 'Git 图', en: 'Git graph' },
+  { lang: 'mindmap', zh: '思维导图', en: 'Mindmap' },
+  { lang: 'timeline', zh: '时间线', en: 'Timeline' },
+  { lang: 'quadrantChart', zh: '象限图', en: 'Quadrant' },
+  { lang: 'requirementDiagram', zh: '需求图', en: 'Requirement' },
+  { lang: 'block-beta', zh: '块图', en: 'Block' },
+  { lang: 'kanban', zh: '看板', en: 'Kanban' },
+  { lang: 'architecture', zh: '架构图', en: 'Architecture' },
+  { lang: 'C4Context', zh: 'C4 架构图', en: 'C4 model' },
+]
+
 onMounted(async () => {
   try {
     platform.value = await invoke('get_platform')
@@ -126,7 +188,7 @@ async function setDefault() {
     @click="onOverlayClick"
   >
     <div
-      class="w-[480px] max-h-[92vh] rounded-2xl flex flex-col"
+      class="w-[720px] max-w-[94vw] h-[620px] max-h-[92vh] rounded-2xl flex flex-col overflow-hidden"
       :style="{
         background: 'var(--dialog-bg)',
         border: '1px solid var(--dialog-border)',
@@ -134,231 +196,316 @@ async function setDefault() {
       }"
     >
       <!-- Header -->
-      <div class="flex items-center justify-between px-7 pt-6 pb-3 flex-shrink-0">
+      <div
+        class="flex items-center justify-between px-6 h-14 flex-shrink-0"
+        :style="{ borderBottom: '1px solid var(--border)' }"
+      >
         <span class="text-base font-bold tracking-tight" :style="{ color: 'var(--text)' }">
           {{ t('settingsTitle', settings.lang) }}
         </span>
+        <button
+          class="w-8 h-8 rounded-lg border-none flex items-center justify-center cursor-pointer"
+          :style="{ background: 'transparent', color: 'var(--text-muted)' }"
+          :title="t('btnClose', settings.lang)"
+          @click="emit('close')"
+        >
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" class="w-4 h-4">
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
       </div>
 
-      <!-- Body -->
-      <div class="flex flex-col px-7 pb-7 overflow-y-auto">
-        <!-- Theme -->
-        <div class="mb-6">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTheme', settings.lang) }}</div>
-          <div class="flex flex-col gap-2.5">
-            <button
-              v-for="opt in THEME_OPTIONS"
-              :key="opt.value"
-              class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
-              :style="{
-                border: '1.5px solid ' + (settings.theme === opt.value ? 'var(--accent)' : 'var(--border)'),
-                background: settings.theme === opt.value ? 'rgba(99,102,241,0.06)' : 'transparent'
-              }"
-              @click="settings.setTheme(opt.value)">
-              <span
-                class="flex items-center justify-center w-10 h-10 rounded-xl flex-shrink-0"
-                :style="{ background: opt.swatchBg, border: opt.swatchBorder }"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  :fill="opt.iconFill || 'none'"
-                  :stroke="opt.iconStroke || 'none'"
-                  stroke-width="1.6"
-                  class="w-5 h-5"
-                  :style="{ color: opt.iconColor }"
-                >
-                  <path v-for="(d, di) in opt.paths" :key="di" :d="d" :fill-rule="opt.fillRule || 'nonzero'" :clip-rule="opt.fillRule || 'nonzero'" />
-                  <circle v-for="(c, ci) in (opt.circles || [])" :key="'c'+ci" :cx="c[0]" :cy="c[1]" :r="c[2]" />
-                </svg>
-              </span>
-              <div class="flex flex-col items-start">
-                <span class="text-sm font-medium" :style="{ color: settings.theme === opt.value ? 'var(--accent)' : 'var(--text)' }">{{ t(opt.labelKey, settings.lang) }}</span>
-                <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t(opt.descKey, settings.lang) }}</span>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        <!-- Divider -->
-        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
-
-        <!-- Language -->
-        <div class="mb-6">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsLang', settings.lang) }}</div>
-          <div class="flex flex-col gap-2.5">
-            <button
-              class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
-              :style="{
-                border: '1.5px solid ' + (settings.lang === 'zh-CN' ? 'var(--accent)' : 'var(--border)'),
-                background: settings.lang === 'zh-CN' ? 'rgba(99,102,241,0.06)' : 'transparent'
-              }"
-              @click="settings.setLang('zh-CN')">
-              <span class="text-xl flex-shrink-0 w-10 h-10 flex items-center justify-center">🇨🇳</span>
-              <div class="flex flex-col items-start">
-                <span class="text-sm font-medium" :style="{ color: settings.lang === 'zh-CN' ? 'var(--accent)' : 'var(--text)' }">中文</span>
-                <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">简体中文</span>
-              </div>
-            </button>
-            <button
-              class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
-              :style="{
-                border: '1.5px solid ' + (settings.lang === 'en' ? 'var(--accent)' : 'var(--border)'),
-                background: settings.lang === 'en' ? 'rgba(99,102,241,0.06)' : 'transparent'
-              }"
-              @click="settings.setLang('en')">
-              <span class="text-xl flex-shrink-0 w-10 h-10 flex items-center justify-center">🇺🇸</span>
-              <div class="flex flex-col items-start">
-                <span class="text-sm font-medium" :style="{ color: settings.lang === 'en' ? 'var(--accent)' : 'var(--text)' }">English</span>
-                <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">US English</span>
-              </div>
-            </button>
-          </div>
-        </div>
-
-        <!-- Divider -->
-        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
-
-        <!-- Default view -->
-        <div class="mb-6">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsView', settings.lang) }}</div>
-          <div class="grid grid-cols-3 gap-2 mb-2.5">
-            <button
-              v-for="m in viewModes"
-              :key="m.value"
-              class="px-2 py-2.5 rounded-xl text-[13px] font-medium cursor-pointer transition-all duration-200"
-              :style="{
-                border: '1.5px solid ' + (settings.viewMode === m.value ? 'var(--accent)' : 'var(--border)'),
-                background: settings.viewMode === m.value ? 'rgba(99,102,241,0.08)' : 'transparent',
-                color: settings.viewMode === m.value ? 'var(--accent)' : 'var(--text)',
-              }"
-              @click="settings.setViewMode(m.value)"
-            >{{ t(m.labelKey, settings.lang) }}</button>
-          </div>
-          <p class="text-xs leading-relaxed mb-1.5" :style="{ color: 'var(--text-muted)' }">
-            {{ t(activeViewMode.descKey, settings.lang) }}
-          </p>
-          <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('viewNote', settings.lang) }}</p>
-        </div>
-
-        <!-- Divider -->
-        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
-
-        <!-- HTML Template -->
-        <div class="mb-6">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
-          <div class="flex items-center gap-2">
-            <select
-              class="flex-1 h-10 px-3 rounded-xl text-[13px] cursor-pointer outline-none"
-              :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1.5px solid var(--border)' }"
-              :value="settings.templateId"
-              @change="settings.setTemplateId($event.target.value)"
+      <!-- Body：左侧选项卡 + 右侧设置内容 -->
+      <div class="flex flex-1 min-h-0">
+        <!-- 左侧选项卡 -->
+        <nav
+          class="w-[176px] flex-shrink-0 flex flex-col gap-1 p-3"
+          :style="{ borderRight: '1px solid var(--border)' }"
+        >
+          <button
+            v-for="tab in TABS"
+            :key="tab.id"
+            class="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-xl text-[13px] font-medium cursor-pointer transition-all duration-150 border-none text-left"
+            :style="{
+              background: activeTab === tab.id ? 'rgba(99,102,241,0.10)' : 'transparent',
+              color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-muted)',
+            }"
+            @click="activeTab = tab.id"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="w-4 h-4 flex-shrink-0"
             >
-              <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
-                {{ tpl.builtin ? t('templateBuiltin', settings.lang) : tpl.id }}
-              </option>
-            </select>
-            <button
-              class="h-10 w-10 rounded-xl border flex items-center justify-center cursor-pointer flex-shrink-0"
-              :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
-              :title="t('btnRefreshList', settings.lang)"
-              @click="loadTemplates"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-                <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
-              </svg>
-            </button>
-            <button
-              class="h-10 px-4 rounded-xl border text-[13px] font-medium cursor-pointer flex-shrink-0 flex items-center gap-1.5"
-              :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
-              :title="t('btnOpenTemplateDir', settings.lang)"
-              @click="openTemplateDir"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-                <path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" />
-              </svg>
-              {{ t('btnOpenTemplateDir', settings.lang) }}
-            </button>
-          </div>
-          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
-          <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
-          <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
-        </div>
+              <path :d="tab.icon" />
+            </svg>
+            {{ t(tab.labelKey, settings.lang) }}
+          </button>
+        </nav>
 
-        <!-- Divider -->
-        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
-
-        <!-- External diagram tools -->
-        <div class="mb-6">
-          <div class="flex items-center justify-between mb-3">
-            <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsExtTools', settings.lang) }}</div>
-            <button
-              class="w-7 h-7 rounded-lg border flex items-center justify-center cursor-pointer"
-              :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
-              :title="t('btnRefreshList', settings.lang)"
-              @click="loadExtTools"
-            >
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
-                <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
-              </svg>
-            </button>
-          </div>
-          <div class="flex flex-col gap-2">
-            <div
-              v-for="tool in extTools"
-              :key="tool.id"
-              class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl"
-              :style="{ border: '1.5px solid var(--border)' }"
-            >
-              <span
-                class="w-2 h-2 rounded-full flex-shrink-0"
-                :style="{ background: tool.installed ? 'var(--accent)' : 'var(--text-dim)' }"
-              ></span>
-              <div class="flex flex-col items-start min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <span class="text-[13px] font-semibold font-mono" :style="{ color: 'var(--text)' }">{{ tool.id }}</span>
+        <!-- 右侧内容 -->
+        <div class="flex-1 min-w-0 overflow-y-auto px-6 py-5">
+          <!-- ===== 外观：主题 + 语言 ===== -->
+          <template v-if="activeTab === 'appearance'">
+            <!-- Theme -->
+            <div class="mb-6">
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTheme', settings.lang) }}</div>
+              <div class="flex flex-col gap-2.5">
+                <button
+                  v-for="opt in THEME_OPTIONS"
+                  :key="opt.value"
+                  class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.theme === opt.value ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.theme === opt.value ? 'rgba(99,102,241,0.06)' : 'transparent'
+                  }"
+                  @click="settings.setTheme(opt.value)">
                   <span
-                    class="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
-                    :style="tool.installed
-                      ? { background: 'rgba(99,102,241,0.12)', color: 'var(--accent)' }
-                      : { background: 'rgba(150,150,150,0.15)', color: 'var(--text-dim)' }"
-                  >{{ tool.installed ? (tool.version || t('toolInstalled', settings.lang)) : t('toolMissing', settings.lang) }}</span>
-                </div>
-                <span class="text-[11px] leading-snug" :style="{ color: 'var(--text-dim)' }">{{ t('tool_' + tool.id + '_desc', settings.lang) }}</span>
-                <span v-if="!tool.installed" class="text-[11px] font-mono leading-snug" :style="{ color: 'var(--amber)' }">{{ t('tool_' + tool.id + '_install', settings.lang) }}</span>
+                    class="flex items-center justify-center w-10 h-10 rounded-xl flex-shrink-0"
+                    :style="{ background: opt.swatchBg, border: opt.swatchBorder }"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      :fill="opt.iconFill || 'none'"
+                      :stroke="opt.iconStroke || 'none'"
+                      stroke-width="1.6"
+                      class="w-5 h-5"
+                      :style="{ color: opt.iconColor }"
+                    >
+                      <path v-for="(d, di) in opt.paths" :key="di" :d="d" :fill-rule="opt.fillRule || 'nonzero'" :clip-rule="opt.fillRule || 'nonzero'" />
+                      <circle v-for="(c, ci) in (opt.circles || [])" :key="'c'+ci" :cx="c[0]" :cy="c[1]" :r="c[2]" />
+                    </svg>
+                  </span>
+                  <div class="flex flex-col items-start">
+                    <span class="text-sm font-medium" :style="{ color: settings.theme === opt.value ? 'var(--accent)' : 'var(--text)' }">{{ t(opt.labelKey, settings.lang) }}</span>
+                    <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t(opt.descKey, settings.lang) }}</span>
+                  </div>
+                </button>
               </div>
             </div>
-          </div>
-          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('extToolsNote', settings.lang) }}</p>
+
+            <!-- Divider -->
+            <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+            <!-- Language -->
+            <div class="mb-2">
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsLang', settings.lang) }}</div>
+              <div class="flex flex-col gap-2.5">
+                <button
+                  class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.lang === 'zh-CN' ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.lang === 'zh-CN' ? 'rgba(99,102,241,0.06)' : 'transparent'
+                  }"
+                  @click="settings.setLang('zh-CN')">
+                  <span class="text-xl flex-shrink-0 w-10 h-10 flex items-center justify-center">🇨🇳</span>
+                  <div class="flex flex-col items-start">
+                    <span class="text-sm font-medium" :style="{ color: settings.lang === 'zh-CN' ? 'var(--accent)' : 'var(--text)' }">中文</span>
+                    <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">简体中文</span>
+                  </div>
+                </button>
+                <button
+                  class="flex items-center gap-4 w-full px-4 py-3 rounded-xl cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.lang === 'en' ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.lang === 'en' ? 'rgba(99,102,241,0.06)' : 'transparent'
+                  }"
+                  @click="settings.setLang('en')">
+                  <span class="text-xl flex-shrink-0 w-10 h-10 flex items-center justify-center">🇺🇸</span>
+                  <div class="flex flex-col items-start">
+                    <span class="text-sm font-medium" :style="{ color: settings.lang === 'en' ? 'var(--accent)' : 'var(--text)' }">English</span>
+                    <span class="text-[11px]" :style="{ color: 'var(--text-dim)' }">US English</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <!-- ===== 视图：默认视图 ===== -->
+          <template v-else-if="activeTab === 'view'">
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsView', settings.lang) }}</div>
+              <div class="grid grid-cols-3 gap-2 mb-2.5">
+                <button
+                  v-for="m in viewModes"
+                  :key="m.value"
+                  class="px-2 py-2.5 rounded-xl text-[13px] font-medium cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.viewMode === m.value ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.viewMode === m.value ? 'rgba(99,102,241,0.08)' : 'transparent',
+                    color: settings.viewMode === m.value ? 'var(--accent)' : 'var(--text)',
+                  }"
+                  @click="settings.setViewMode(m.value)"
+                >{{ t(m.labelKey, settings.lang) }}</button>
+              </div>
+              <p class="text-xs leading-relaxed mb-1.5" :style="{ color: 'var(--text-muted)' }">
+                {{ t(activeViewMode.descKey, settings.lang) }}
+              </p>
+              <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('viewNote', settings.lang) }}</p>
+            </div>
+          </template>
+
+          <!-- ===== 导出：HTML 模板 ===== -->
+          <template v-else-if="activeTab === 'export'">
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
+              <div class="flex items-center gap-2">
+                <select
+                  class="flex-1 h-10 px-3 rounded-xl text-[13px] cursor-pointer outline-none"
+                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1.5px solid var(--border)' }"
+                  :value="settings.templateId"
+                  @change="settings.setTemplateId($event.target.value)"
+                >
+                  <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
+                    {{ tpl.builtin ? t('templateBuiltin', settings.lang) : tpl.id }}
+                  </option>
+                </select>
+                <button
+                  class="h-10 w-10 rounded-xl border flex items-center justify-center cursor-pointer flex-shrink-0"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
+                  :title="t('btnRefreshList', settings.lang)"
+                  @click="loadTemplates"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                    <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
+                  </svg>
+                </button>
+                <button
+                  class="h-10 px-4 rounded-xl border text-[13px] font-medium cursor-pointer flex-shrink-0 flex items-center gap-1.5"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+                  :title="t('btnOpenTemplateDir', settings.lang)"
+                  @click="openTemplateDir"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                    <path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" />
+                  </svg>
+                  {{ t('btnOpenTemplateDir', settings.lang) }}
+                </button>
+              </div>
+              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
+              <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
+              <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
+            </div>
+          </template>
+
+          <!-- ===== 图表：内置渲染能力 + 需外部工具的类型 ===== -->
+          <template v-else-if="activeTab === 'diagrams'">
+            <!-- 内置：随二进制打包的 Mermaid，离线可用 -->
+            <div class="mb-6">
+              <div class="flex items-center justify-between mb-3">
+                <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsBuiltinDiagrams', settings.lang) }}</div>
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded-md font-medium font-mono"
+                  :style="{ background: 'rgba(99,102,241,0.12)', color: 'var(--accent)' }"
+                >Mermaid 11</span>
+              </div>
+              <div class="grid grid-cols-2 gap-1.5">
+                <div
+                  v-for="d in BUILTIN_DIAGRAMS"
+                  :key="d.lang"
+                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg min-w-0"
+                  :style="{ border: '1px solid var(--border)' }"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :style="{ background: 'var(--accent)' }"></span>
+                  <span class="text-[12px] flex-shrink-0" :style="{ color: 'var(--text)' }">{{ settings.lang === 'en' ? d.en : d.zh }}</span>
+                  <code class="text-[10px] font-mono truncate" :style="{ color: 'var(--text-dim)' }" :title="d.lang">{{ d.lang }}</code>
+                </div>
+              </div>
+              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('settingsBuiltinNote', settings.lang) }}</p>
+            </div>
+
+            <!-- Divider -->
+            <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+            <!-- 外部工具：未装时静默降级，装了重新导出即生效 -->
+            <div>
+              <div class="flex items-center justify-between mb-3">
+                <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsExtDiagrams', settings.lang) }}</div>
+                <button
+                  class="w-7 h-7 rounded-lg border flex items-center justify-center cursor-pointer"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
+                  :title="t('btnRefreshList', settings.lang)"
+                  @click="loadExtTools"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                    <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
+                  </svg>
+                </button>
+              </div>
+              <div class="flex flex-col gap-2">
+                <div
+                  v-for="tool in extTools"
+                  :key="tool.id"
+                  class="flex items-center gap-3 px-3.5 py-2.5 rounded-xl"
+                  :style="{ border: '1.5px solid var(--border)' }"
+                >
+                  <span
+                    class="w-2 h-2 rounded-full flex-shrink-0"
+                    :style="{ background: tool.installed ? 'var(--accent)' : 'var(--text-dim)' }"
+                  ></span>
+                  <div class="flex flex-col items-start min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="text-[13px] font-semibold font-mono" :style="{ color: 'var(--text)' }">{{ tool.id }}</span>
+                      <span
+                        class="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                        :style="tool.installed
+                          ? { background: 'rgba(99,102,241,0.12)', color: 'var(--accent)' }
+                          : { background: 'rgba(150,150,150,0.15)', color: 'var(--text-dim)' }"
+                      >{{ tool.installed ? (tool.version || t('toolInstalled', settings.lang)) : t('toolMissing', settings.lang) }}</span>
+                    </div>
+                    <span class="text-[11px] leading-snug" :style="{ color: 'var(--text-dim)' }">{{ t('tool_' + tool.id + '_desc', settings.lang) }}</span>
+                    <span v-if="!tool.installed" class="text-[11px] font-mono leading-snug" :style="{ color: 'var(--amber)' }">{{ t('tool_' + tool.id + '_install', settings.lang) }}</span>
+                    <!-- 已装时显示实际解析到的路径：多版本共存时可据此确认到底是哪个生效 -->
+                    <span
+                      v-else-if="tool.path"
+                      class="text-[11px] font-mono leading-snug truncate max-w-full"
+                      :style="{ color: 'var(--text-dim)' }"
+                      :title="tool.path"
+                    >{{ tool.path }}</span>
+                  </div>
+                </div>
+              </div>
+              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('extToolsNote', settings.lang) }}</p>
+            </div>
+          </template>
+
+          <!-- ===== 关联：默认打开程序 ===== -->
+          <template v-else>
+            <div>
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsDefaultApp', settings.lang) }}</div>
+              <p class="text-xs leading-relaxed mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('defaultAppDesc', settings.lang) }}</p>
+              <button
+                class="h-10 px-5 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
+                :style="{ background: 'var(--amber)', color: '#fff', opacity: defaultBusy ? 0.6 : 1 }"
+                :disabled="defaultBusy"
+                @click="setDefault"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                  <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" />
+                  <path d="M8 5.5V8l1.8 1.8" />
+                </svg>
+                {{ defaultBusy ? '…' : t('btnSetDefault', settings.lang) }}
+              </button>
+              <p v-if="defaultMsg" class="mt-2.5 text-xs leading-relaxed" :style="{ color: defaultMsg.ok ? 'var(--accent)' : '#ef4444' }">
+                {{ defaultMsg.text }}
+              </p>
+              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('defaultAppNote', settings.lang) }}</p>
+            </div>
+          </template>
         </div>
+      </div>
 
-        <!-- Divider -->
-        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
-
-        <!-- Default app -->
-        <div class="mb-6">
-          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsDefaultApp', settings.lang) }}</div>
-          <p class="text-xs leading-relaxed mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('defaultAppDesc', settings.lang) }}</p>
-          <button
-            class="h-10 px-5 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-2"
-            :style="{ background: 'var(--amber)', color: '#fff', opacity: defaultBusy ? 0.6 : 1 }"
-            :disabled="defaultBusy"
-            @click="setDefault"
-          >
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-              <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" />
-              <path d="M8 5.5V8l1.8 1.8" />
-            </svg>
-            {{ defaultBusy ? '…' : t('btnSetDefault', settings.lang) }}
-          </button>
-          <p v-if="defaultMsg" class="mt-2.5 text-xs leading-relaxed" :style="{ color: defaultMsg.ok ? 'var(--accent)' : '#ef4444' }">
-            {{ defaultMsg.text }}
-          </p>
-          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('defaultAppNote', settings.lang) }}</p>
-        </div>
-
-        <!-- Close button -->
+      <!-- Footer -->
+      <div
+        class="flex items-center justify-end px-6 h-14 flex-shrink-0"
+        :style="{ borderTop: '1px solid var(--border)' }"
+      >
         <button
-          class="h-10 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98] flex-shrink-0"
+          class="h-9 px-5 rounded-xl border-none text-sm font-semibold cursor-pointer tracking-wide transition-all duration-150 hover:scale-[1.02] active:scale-[0.98]"
           :style="{ background: 'var(--accent)', color: '#fff' }"
           @click="emit('close')">{{ t('btnClose', settings.lang) }}</button>
       </div>
