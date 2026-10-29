@@ -47,6 +47,7 @@ onMounted(async () => {
   try {
     platform.value = await invoke('get_platform')
   } catch (_) {}
+  loadTemplates()
 })
 
 const viewModes = [
@@ -56,6 +57,31 @@ const viewModes = [
 ]
 const activeViewMode = computed(
   () => viewModes.find(m => m.value === settings.viewMode) || viewModes[2],
+)
+
+// ===== HTML 模板选择 =====
+// 预览与导出共用所选模板；列表来自后端（内置 + 外置目录扫描）
+const templates = ref([])
+const templatesError = ref(false)
+
+async function loadTemplates() {
+  templatesError.value = false
+  try {
+    templates.value = await invoke('list_templates')
+  } catch (_) {
+    templatesError.value = true
+  }
+}
+
+async function openTemplateDir() {
+  try { await invoke('open_templates_dir') } catch (_) {}
+}
+
+/// 当前选中的 id 在列表里不存在时（如外置模板被删），仍保留用户选择，
+/// 后端会回退到内置模板渲染，这里只提示不强制改选
+const templateMissing = computed(() =>
+  templates.value.length > 0 &&
+  !templates.value.some(t => t.id === settings.templateId)
 )
 
 function onOverlayClick(e) {
@@ -202,6 +228,50 @@ async function setDefault() {
             {{ t(activeViewMode.descKey, settings.lang) }}
           </p>
           <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('viewNote', settings.lang) }}</p>
+        </div>
+
+        <!-- Divider -->
+        <div class="w-full h-px mb-6" :style="{ background: 'var(--border)' }"></div>
+
+        <!-- HTML Template -->
+        <div class="mb-6">
+          <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
+          <div class="flex items-center gap-2">
+            <select
+              class="flex-1 h-10 px-3 rounded-xl text-[13px] cursor-pointer outline-none"
+              :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1.5px solid var(--border)' }"
+              :value="settings.templateId"
+              @change="settings.setTemplateId($event.target.value)"
+            >
+              <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
+                {{ tpl.builtin ? t('templateBuiltin', settings.lang) : tpl.id }}
+              </option>
+            </select>
+            <button
+              class="h-10 w-10 rounded-xl border flex items-center justify-center cursor-pointer flex-shrink-0"
+              :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
+              :title="t('btnRefreshList', settings.lang)"
+              @click="loadTemplates"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
+              </svg>
+            </button>
+            <button
+              class="h-10 px-4 rounded-xl border text-[13px] font-medium cursor-pointer flex-shrink-0 flex items-center gap-1.5"
+              :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+              :title="t('btnOpenTemplateDir', settings.lang)"
+              @click="openTemplateDir"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                <path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" />
+              </svg>
+              {{ t('btnOpenTemplateDir', settings.lang) }}
+            </button>
+          </div>
+          <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
+          <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
+          <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
         </div>
 
         <!-- Divider -->

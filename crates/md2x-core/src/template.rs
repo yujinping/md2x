@@ -1,4 +1,119 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::error::MpeError;
+
+/// 内置默认模板的 id。设置面板、CLI 均用该 id 指代编译进二进制的 mpe.html。
+pub const BUILTIN_TEMPLATE_ID: &str = "default";
+
+/// 一个可渲染的 HTML 模板：完整 HTML 文档，内含占位符（{{BODY}}、{{TITLE}} 等）。
+///
+/// 契约：必须包含 `{{BODY}}`；其余占位符可选，缺失时不填充（见 `fill_template`）。
+/// 外部模板作者需自行提供样式与交互脚本；内置资源占位符
+/// （{{GITHUB_MD_CSS}} 等）仍会注入对应内容，想用直接放占位符即可。
+#[derive(Debug, Clone)]
+pub struct HtmlTemplate {
+    /// 模板 id：内置为 "default"，外部为文件名去扩展名
+    pub id: String,
+    /// 来源描述（"builtin" 或文件路径），用于错误信息定位
+    pub source: String,
+    /// 模板 HTML 全文
+    html: String,
+}
+
+impl HtmlTemplate {
+    /// 编译期打入的默认模板
+    pub fn builtin() -> Self {
+        HtmlTemplate {
+            id: BUILTIN_TEMPLATE_ID.to_string(),
+            source: "builtin".to_string(),
+            html: include_str!("../../../templates/mpe.html").to_string(),
+        }
+    }
+
+    /// 从外部文件加载模板：读文件并校验 `{{BODY}}` 占位符。
+    /// 文件缺失或校验失败均报错，由调用方决定回退策略（GUI 回退内置，CLI 直接报错退出）。
+    pub fn from_file(path: &Path) -> Result<Self, MpeError> {
+        let html = std::fs::read_to_string(path).map_err(MpeError::IoError)?;
+        if !is_valid_template(&html) {
+            return Err(MpeError::TemplateError(format!(
+                "模板缺少 {{{{BODY}}}} 占位符: {}",
+                path.display()
+            )));
+        }
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("external")
+            .to_string();
+        Ok(HtmlTemplate {
+            id,
+            source: path.to_string_lossy().to_string(),
+            html,
+        })
+    }
+
+    /// 模板 HTML 全文
+    pub fn as_str(&self) -> &str {
+        &self.html
+    }
+}
+
+/// 模板有效性：必须含 `{{BODY}}` 占位符，否则正文无处安放
+pub fn is_valid_template(html: &str) -> bool {
+    html.contains("{{BODY}}")
+}
+
+/// 外部模板扫描结果：id（文件名去扩展名）与文件路径
+#[derive(Debug, Clone)]
+pub struct ExternalTemplateInfo {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+/// 扫描外部模板目录下可用的模板（*.html 且含 {{BODY}}），按文件名排序。
+/// 目录不存在时返回空列表，不报错——外置模板是可选能力。
+pub fn scan_external_templates(dir: &Path) -> Vec<ExternalTemplateInfo> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("html")) != Some(true)
+        {
+            continue;
+        }
+        let ok = std::fs::read_to_string(&p)
+            .map(|s| is_valid_template(&s))
+            .unwrap_or(false);
+        if !ok {
+            continue;
+        }
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            out.push(ExternalTemplateInfo {
+                id: stem.to_string(),
+                path: p,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// 按 id 加载模板，永不失败：
+/// - "default" / 空 → 内置模板
+/// - 其他 id → 外部目录下 `<id>.html`；文件缺失或校验失败时回退内置
+///
+/// 刻意宽松：设置里残留的失效 id 不应导致预览/导出失败。
+pub fn load_template(id: &str, external_dir: &Path) -> HtmlTemplate {
+    if id.is_empty() || id == BUILTIN_TEMPLATE_ID {
+        return HtmlTemplate::builtin();
+    }
+    let path = external_dir.join(format!("{}.html", id));
+    HtmlTemplate::from_file(&path).unwrap_or_else(|_| HtmlTemplate::builtin())
+}
 
 /// 主题档位。
 ///
@@ -54,10 +169,25 @@ pub fn render_aggregate_html(
     full_width: bool,
     theme: Theme,
 ) -> String {
+    render_aggregate_html_with(&HtmlTemplate::builtin(), body, title, doc_tree, full_width, theme)
+}
+
+/// 渲染多文档聚合页面（指定模板版本）。
+///
+/// 外部模板若缺少 `{{DOC_TREE}}` 占位符，文档树不会出现（其余内容不受影响）。
+pub fn render_aggregate_html_with(
+    tpl: &HtmlTemplate,
+    body: &str,
+    title: &str,
+    doc_tree: &str,
+    full_width: bool,
+    theme: Theme,
+) -> String {
     // 聚合页的正文已在合并阶段注入过带前缀的锚点，此处只取正文不再改写 id
     let (items, body_fixed) = inject_heading_ids(body, "");
     let print_toc = crate::print_toc::render_print_toc(&items);
     fill_template(
+        tpl.as_str(),
         body_fixed,
         title,
         "",
@@ -77,6 +207,25 @@ pub fn render_html_template_with_metadata(
     full_width: bool,
     theme: Theme,
 ) -> String {
+    render_html_with(
+        &HtmlTemplate::builtin(),
+        html_body,
+        title,
+        metadata,
+        full_width,
+        theme,
+    )
+}
+
+/// 渲染单文档的完整 HTML 页面（指定模板版本）。
+pub fn render_html_with(
+    tpl: &HtmlTemplate,
+    html_body: &str,
+    title: &str,
+    metadata: Option<&HashMap<String, String>>,
+    full_width: bool,
+    theme: Theme,
+) -> String {
     let (items, body_fixed) = inject_heading_ids(html_body, "");
     let toc_html = build_toc_html(&items);
     let metadata_html = metadata
@@ -84,6 +233,7 @@ pub fn render_html_template_with_metadata(
         .unwrap_or_default();
     let print_toc = crate::print_toc::render_print_toc(&items);
     fill_template(
+        tpl.as_str(),
         body_fixed,
         title,
         &toc_html,
@@ -96,7 +246,10 @@ pub fn render_html_template_with_metadata(
 }
 
 /// 填充模板占位符：单文档与聚合页面共用的收尾步骤
+// 参数对应模板的各占位符，均为独立语义，强行打包成结构体反而降低可读性
+#[allow(clippy::too_many_arguments)]
 fn fill_template(
+    template: &str,
     body_fixed: String,
     title: &str,
     toc_html: &str,
@@ -106,7 +259,6 @@ fn fill_template(
     theme: Theme,
     print_toc: &str,
 ) -> String {
-    let template = include_str!("../../../templates/mpe.html");
     let github_css = include_str!("../../../templates/assets/github-markdown.min.css");
     let atom_css = include_str!("../../../templates/assets/atom-one-dark.min.css");
     let highlight_js = include_str!("../../../templates/assets/highlight.min.js");
@@ -196,16 +348,6 @@ fn render_skill_metadata_html(meta: &HashMap<String, String>) -> String {
         description = description.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"),
         extra = extra,
     )
-}
-
-/// 注入标题锚点并生成侧栏目录。
-///
-/// 返回 (目录 HTML, 注入锚点后的正文)。目录为空时返回空串——
-/// 外层 `<ul class="toc">` 由模板提供。
-fn generate_toc(body: &str) -> (String, String) {
-    let (items, result) = inject_heading_ids(body, "");
-    let toc = build_toc_html(&items);
-    (toc, result)
 }
 
 /// 由标题清单生成侧栏目录 HTML。
@@ -555,7 +697,8 @@ mod tests {
     #[test]
     fn 正文标题被注入锚点id() {
         let body = "<h1>标题一</h1><p>正文</p><h2>子节</h2>";
-        let (toc, fixed) = generate_toc(body);
+        let (items, fixed) = inject_heading_ids(body, "");
+        let toc = build_toc_html(&items);
         assert!(fixed.contains("id=\"标题一\""));
         assert!(fixed.contains("id=\"子节\""));
         assert!(toc.contains("href=\"#标题一\""));
@@ -564,14 +707,15 @@ mod tests {
 
     #[test]
     fn 无标题时不输出目录容器() {
-        let (toc, _) = generate_toc("<p>只有正文</p>");
-        assert!(toc.is_empty());
+        let (items, _) = inject_heading_ids("<p>只有正文</p>", "");
+        assert!(build_toc_html(&items).is_empty());
     }
 
     #[test]
     fn 已带id的标题不重复注入() {
         let body = "<h2 id=\"custom\">已有 id</h2>";
-        let (_, fixed) = generate_toc(body);
+        let (items, fixed) = inject_heading_ids(body, "");
+        let _ = build_toc_html(&items);
         assert_eq!(fixed.matches("id=\"custom\"").count(), 1);
     }
 
@@ -630,5 +774,110 @@ mod tests {
         assert_eq!(Theme::parse(""), Theme::Auto);
         assert_eq!(Theme::parse("blue"), Theme::Auto);
         assert_eq!(Theme::parse("dark-mode"), Theme::Auto);
+    }
+
+    // ===== 模板加载与校验 =====
+
+    #[test]
+    fn 内置模板有效且id为default() {
+        let t = HtmlTemplate::builtin();
+        assert_eq!(t.id, BUILTIN_TEMPLATE_ID);
+        assert!(is_valid_template(t.as_str()));
+        assert!(t.as_str().contains("{{BODY}}"));
+    }
+
+    #[test]
+    fn 缺body占位符的模板无效() {
+        assert!(!is_valid_template("<html><body>正文</body></html>"));
+        assert!(is_valid_template("<html><body>{{BODY}}</body></html>"));
+    }
+
+    #[test]
+    fn 从文件加载模板并取文件名为id() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-load");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("paper.html");
+        std::fs::write(&p, "<html><body>{{BODY}}</body></html>").unwrap();
+        let t = HtmlTemplate::from_file(&p).unwrap();
+        assert_eq!(t.id, "paper");
+        assert!(t.as_str().contains("{{BODY}}"));
+    }
+
+    #[test]
+    fn 加载缺占位符模板报错() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-invalid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("broken.html");
+        std::fs::write(&p, "<html><body>no placeholder</body></html>").unwrap();
+        assert!(HtmlTemplate::from_file(&p).is_err());
+    }
+
+    #[test]
+    fn 加载不存在的模板文件报错() {
+        let p = std::env::temp_dir().join("md2x-tpl-not-exist-xyz.html");
+        assert!(HtmlTemplate::from_file(&p).is_err());
+    }
+
+    #[test]
+    fn load_template内置id与空串返回内置() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-dir");
+        let t1 = load_template(BUILTIN_TEMPLATE_ID, &dir);
+        let t2 = load_template("", &dir);
+        assert_eq!(t1.id, BUILTIN_TEMPLATE_ID);
+        assert_eq!(t2.id, BUILTIN_TEMPLATE_ID);
+    }
+
+    #[test]
+    fn load_template外部id命中文件() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-hit");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("custom.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        let t = load_template("custom", &dir);
+        assert_eq!(t.id, "custom");
+    }
+
+    #[test]
+    fn load_template失效id回退内置() {
+        // 设置里残留的失效 id 不应导致渲染失败
+        let dir = std::env::temp_dir().join("md2x-tpl-test-fallback");
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = load_template("missing-template", &dir);
+        assert_eq!(t.id, BUILTIN_TEMPLATE_ID);
+    }
+
+    #[test]
+    fn 扫描外部模板只收含占位符的html() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-scan");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        std::fs::write(dir.join("a.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        std::fs::write(dir.join("bad.html"), "<html><body>x</body></html>").unwrap();
+        std::fs::write(dir.join("note.txt"), "{{BODY}}").unwrap();
+        let found = scan_external_templates(&dir);
+        let ids: Vec<&str> = found.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, vec!["a", "b"], "无效文件与非 html 应被排除，且按名称排序");
+    }
+
+    #[test]
+    fn 扫描不存在的目录返回空() {
+        let dir = std::env::temp_dir().join("md2x-tpl-test-no-such-dir-xyz");
+        assert!(scan_external_templates(&dir).is_empty());
+    }
+
+    #[test]
+    fn 自定义模板能完成渲染填充() {
+        // 端到端：外部模板 + 正文 → 完整页面，正文落位于 {{BODY}} 处
+        let tpl = HtmlTemplate {
+            id: "mini".to_string(),
+            source: "test".to_string(),
+            html: "<html><head><title>{{TITLE}}</title></head><body>{{BODY}}</body></html>"
+                .to_string(),
+        };
+        let out = render_html_with(&tpl, "<h2>标题</h2><p>正文</p>", "文档", None, false, Theme::Auto);
+        assert!(out.contains("<title>文档</title>"));
+        assert!(out.contains("正文"));
+        assert!(!out.contains("{{BODY}}"), "渲染后不应残留 BODY 占位符");
+        assert!(out.contains("id=\"标题\""), "TOC 锚点注入与模板无关，应照常生效");
     }
 }

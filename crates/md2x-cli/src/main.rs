@@ -32,6 +32,11 @@ struct Cli {
     /// Baking it in keeps the file looking the same on any machine.
     #[arg(long, default_value = "auto")]
     theme: String,
+
+    /// Path to an external HTML template file (must contain the {{BODY}} placeholder).
+    /// When omitted, the built-in default template is used.
+    #[arg(long, value_name = "FILE")]
+    template: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -46,6 +51,12 @@ fn run() -> Result<(), error::MpeError> {
     let cli = Cli::parse();
     let path = Path::new(&cli.file);
     let theme = template::Theme::parse(&cli.theme);
+    // 外置模板：显式指定时加载失败直接报错退出（与 GUI 的静默回退不同，
+    // CLI 用户明确表达了意图，静默回退会产出非预期结果）
+    let tpl = match &cli.template {
+        Some(p) => Some(template::HtmlTemplate::from_file(Path::new(p))?),
+        None => None,
+    };
 
     if !path.exists() {
         return Err(error::MpeError::FileNotFound(cli.file));
@@ -69,7 +80,7 @@ fn run() -> Result<(), error::MpeError> {
             None => path.join(format!("{name}.{ext}")),
         };
         let result =
-            md2x_core::aggregate::aggregate_folder_to_html(path, cli.full_width, theme)?;
+            md2x_core::aggregate::aggregate_folder_to_html(path, cli.full_width, theme, tpl.as_ref())?;
         //按 --format 分发：PDF 走 CDP 以生成书签树，DOCX 先拼 Markdown 再转换
         match cli.format {
             OutputFormat::Pdf => {
@@ -126,13 +137,23 @@ fn run() -> Result<(), error::MpeError> {
         .unwrap_or("Untitled");
 
     // 渲染完整 HTML
-    let full_html = template::render_html_template_with_metadata(
-        &html_body,
-        title,
-        metadata.as_ref(),
-        cli.full_width,
-        theme,
-    );
+    let full_html = match &tpl {
+        Some(t) => template::render_html_with(
+            t,
+            &html_body,
+            title,
+            metadata.as_ref(),
+            cli.full_width,
+            theme,
+        ),
+        None => template::render_html_template_with_metadata(
+            &html_body,
+            title,
+            metadata.as_ref(),
+            cli.full_width,
+            theme,
+        ),
+    };
 
     // 按输出格式分发：HTML 直接写出，PDF / PNG 先渲染到临时 HTML 再交给 Chrome
     match cli.format {

@@ -34,6 +34,7 @@ cargo run -p md2x-cli -- README.md --format html  # 生成 README.html
 cargo run -p md2x-cli -- README.md --format png   # 生成 README.png（1920x1080 截图）
 cargo run -p md2x-cli -- README.md --format docx  # 生成 README.docx（可编辑 Word 文档，不依赖 Office）
 cargo run -p md2x-cli -- README.md --preview      # 生成 PDF 并用默认应用打开
+cargo run -p md2x-cli -- README.md --format html --template my-tpl.html  # 指定外置 HTML 模板
 ```
 
 ### 全局安装（推荐）
@@ -61,7 +62,26 @@ cd .. && cargo run -p md2x-gui
 - **单文件预览**：打开 / 拖入 `.md` 文件，HTML 即时预览，可导出 PDF、HTML、DOCX
 - **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
 - **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
+- **HTML 模板**：预览与导出使用同一套模板；内置默认模板之外，把含 `{{BODY}}` 占位符的 `.html` 文件放入模板目录（设置 → 打开模板目录）即可在设置中选用，CLI 用 `--template <文件>` 指定
 - **默认打开程序**：设置中一键把 `.md` 关联到 md2x（Windows 写注册表、macOS 写 LaunchServices、Linux 使用 xdg-mime），双击 Markdown 文件即可用 md2x 打开
+
+### 自定义 HTML 模板
+
+外置模板是一份完整 HTML 文档，占位符契约：
+
+| 占位符 | 必需 | 说明 |
+|---|---|---|
+| `{{BODY}}` | ✅ | 正文落点，缺失则模板不被识别 |
+| `{{TITLE}}` | | 文档标题 |
+| `{{TOC}}` | | 侧栏目录（嵌套 ul） |
+| `{{PRINT_TOC}}` | | 打印目录页（仅 @media print 可见） |
+| `{{DOC_TREE}}` | | 聚合导出的文档树 |
+| `{{SKILL_METADATA}}` | | SKILL.md 元数据卡片 |
+| `{{THEME_LOCK}}` | | 主题档位（auto/light/dark） |
+| `{{WIDTH_VARS}}` | | 全宽模式 CSS |
+| `{{GITHUB_MD_CSS}}` 等 | | 内置样式与脚本，按需取用 |
+
+模板自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联。首次打开模板目录会生成一份说明 README。
 
 ## 工作流
 

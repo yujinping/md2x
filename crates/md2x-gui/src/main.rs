@@ -37,7 +37,7 @@ fn cli_run(file: &str) {
         std::process::exit(1);
     }
 
-    match md2x_gui_lib::generate_pdf_from_file(path, false) {
+    match md2x_gui_lib::generate_pdf_from_file(path, false, None) {
         Ok(pdf_path) => {
             println!("PDF generated: {}", pdf_path.display());
         }

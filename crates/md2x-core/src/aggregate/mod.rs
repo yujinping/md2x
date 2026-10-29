@@ -57,10 +57,14 @@ pub struct AggregateResult {
 ///
 /// 图片在渲染阶段即转为 base64、mermaid 烘焙为内嵌 SVG、CSS/JS 内联，
 /// 因此产物可脱离文件系统独立打开。
+///
+/// `tpl` 为 None 时用内置默认模板；传入外部模板时缺少 `{{DOC_TREE}}`
+/// 占位符只会丢失文档树，不影响其余内容。
 pub fn aggregate_folder_to_html(
     root: &Path,
     full_width: bool,
     theme: crate::template::Theme,
+    tpl: Option<&template::HtmlTemplate>,
 ) -> Result<AggregateResult, MpeError> {
     if !root.is_dir() {
         return Err(MpeError::FileNotFound(root.to_string_lossy().to_string()));
@@ -104,7 +108,10 @@ pub fn aggregate_folder_to_html(
         .unwrap_or("文档合集")
         .to_string();
 
-    let html = template::render_aggregate_html(&body, &title, &doc_tree, full_width, theme);
+    let html = match tpl {
+        Some(t) => template::render_aggregate_html_with(t, &body, &title, &doc_tree, full_width, theme),
+        None => template::render_aggregate_html(&body, &title, &doc_tree, full_width, theme),
+    };
 
     Ok(AggregateResult {
         html,
@@ -270,7 +277,7 @@ mod tests {
         write(d.as_path(), "a.md", "# A\n\n## 概述\n\n正文");
         write(d.as_path(), "sub/b.md", "# B\n\n## 概述\n\n正文");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert_eq!(r.doc_count, 3);
         assert!(r.html.contains("id=\"doc-0\""));
         assert!(r.html.contains("id=\"doc-1\""));
@@ -286,7 +293,7 @@ mod tests {
         write(d.as_path(), "a.md", "# A\n\n## 概述");
         write(d.as_path(), "b.md", "# B\n\n## 概述");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains("doc-1-概述"));
         assert!(r.html.contains("doc-2-概述"));
         // 页面上不应同时存在两个裸的 id="概述"
@@ -301,7 +308,7 @@ mod tests {
         write(d.as_path(), "a.md", "# A");
         write(d.as_path(), "sub/b.md", "# B");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         // 原 .md 链接应已被替换为锚点
         assert!(!r.html.contains("href=\"a.md\""));
         assert!(r.html.contains("href=\"#doc-"));
@@ -313,7 +320,7 @@ mod tests {
         let d = tmpdir("anchor");
         write(d.as_path(), "README.md", "# 索引\n\n[跳自己](#标题)");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains("href=\"#doc-0-标题\""));
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -324,7 +331,7 @@ mod tests {
         write(d.as_path(), "README.md", "# 索引");
         write(d.as_path(), "a.md", "# A");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains("doc-tree"));
         assert!(r.html.contains("href=\"#doc-0\""));
         assert!(r.html.contains("href=\"#doc-1\""));
@@ -336,7 +343,7 @@ mod tests {
         let d = tmpdir("ext");
         write(d.as_path(), "README.md", "# 索引\n\n[站外](https://example.com)");
 
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains("https://example.com"));
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -344,7 +351,7 @@ mod tests {
     #[test]
     fn 空目录返回错误() {
         let d = tmpdir("empty");
-        let e = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto);
+        let e = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None);
         assert!(e.is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -353,7 +360,7 @@ mod tests {
     fn 非目录返回错误() {
         let d = tmpdir("notdir");
         write(d.as_path(), "a.md", "# A");
-        let e = aggregate_folder_to_html(&d.join("a.md"), false, crate::template::Theme::Auto);
+        let e = aggregate_folder_to_html(&d.join("a.md"), false, crate::template::Theme::Auto, None);
         assert!(e.is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -366,7 +373,7 @@ mod tests {
             "a.md",
             "---\ntitle: T\n---\n\n# 正文标题",
         );
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(!r.html.contains("title: T"), "front matter 不应出现在正文");
         assert!(r.html.contains("正文标题"));
         let _ = std::fs::remove_dir_all(&d);
@@ -376,7 +383,7 @@ mod tests {
     fn 转义标题中的尖括号防破坏结构() {
         let d = tmpdir("esc");
         write(d.as_path(), "a.md", "---\ntitle: \"<b>&x</b>\"\n---\n\n# A");
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(!r.html.contains("<b>&x</b>"), "标题应被转义");
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -387,7 +394,7 @@ mod tests {
         let d = tmpdir("theme");
         write(d.as_path(), "README.md", "# 索引");
 
-        let dark = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Dark)
+        let dark = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Dark, None)
             .unwrap();
         assert!(
             dark.html.contains("var injected = 'dark'"),
@@ -398,11 +405,11 @@ mod tests {
             "占位符必须被替换干净"
         );
 
-        let light = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Light)
+        let light = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Light, None)
             .unwrap();
         assert!(light.html.contains("var injected = 'light'"));
 
-        let auto = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto)
+        let auto = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None)
             .unwrap();
         assert!(auto.html.contains("var injected = 'auto'"));
         let _ = std::fs::remove_dir_all(&d);
@@ -414,7 +421,7 @@ mod tests {
         // 否则接收方点主题切换按钮会失效
         let d = tmpdir("palette");
         write(d.as_path(), "README.md", "# 索引");
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Dark).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Dark, None).unwrap();
         assert!(r.html.contains("html[data-theme=\"dark\"]"));
         assert!(r.html.contains("--bg: #f5f5f5"), "浅色变量应保留");
         assert!(r.html.contains("--bg: #0d1117"), "暗色变量应保留");
@@ -426,7 +433,7 @@ mod tests {
         // 抽屉式侧栏依赖遮罩点击关闭，缺失会导致手机上关不掉目录
         let d = tmpdir("scrim");
         write(d.as_path(), "README.md", "# 索引");
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains("id=\"sidebarScrim\""));
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -438,7 +445,7 @@ mod tests {
         // 2) <noscript> 提示条引导用户改用系统浏览器
         let d = tmpdir("nojs");
         write(d.as_path(), "README.md", "# 索引");
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         assert!(r.html.contains(r#"<html lang="zh-CN" class="no-js">"#));
         assert!(r.html.contains("<noscript>"));
         assert!(r.html.contains("nojs-notice"), "提示条容器应存在");
@@ -454,7 +461,7 @@ mod tests {
         // no-js 的移除必须发生在 DOM 渲染前，否则会看到降级样式一闪
         let d = tmpdir("detect");
         write(d.as_path(), "README.md", "# 索引");
-        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto).unwrap();
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None).unwrap();
         let head = r.html.find("<head>").expect("应有 head");
         let detect = r
             .html

@@ -6,6 +6,7 @@ const LS_THEME = 'mpe-theme'
 const LS_LANG = 'mpe-lang'
 const LS_FULL_WIDTH = 'mpe-full-width'
 const LS_VIEW_MODE = 'mpe-view-mode'
+const LS_TEMPLATE_ID = 'mpe-template-id'
 
 // 合法档位：浅色 / 暗色。
 // 与导出页面右下角切换按钮保持一致 —— 那边是二态互切，没有「跟随系统」档。
@@ -25,6 +26,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const fullWidth = ref(localStorage.getItem(LS_FULL_WIDTH) === '1')
   // 默认视图：single（单文件，无文件树）/ folder（文件夹树）/ auto（按启动内容自动）
   const viewMode = ref(localStorage.getItem(LS_VIEW_MODE) || 'auto')
+  // HTML 模板 id：default 为内置模板，其余为外置模板目录下的文件名去扩展名。
+  // 预览与导出共用同一档，保证「看到的样子 = 导出的样子」。
+  const templateId = ref(localStorage.getItem(LS_TEMPLATE_ID) || 'default')
 
   // 主题变更订阅者：预览需要据此重新渲染，保证「设置里切的 = 预览里看到的」
   const themeListeners = new Set()
@@ -87,15 +91,23 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(LS_VIEW_MODE, val)
   }
 
+  function setTemplateId(val) {
+    if (!val) return
+    templateId.value = val
+    localStorage.setItem(LS_TEMPLATE_ID, val)
+  }
+
   return {
     theme,
     lang,
     fullWidth,
     viewMode,
+    templateId,
     setTheme,
     setLang,
     setFullWidth,
     setViewMode,
+    setTemplateId,
     onThemeChange,
     prefersDark
   }

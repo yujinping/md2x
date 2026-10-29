@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from './stores/settings.js'
 import { t } from './i18n/index.js'
@@ -142,7 +142,7 @@ async function goForward() {
 async function loadPreview() {
   let tmp
   try {
-    tmp = await invoke('get_html', { theme: settings.theme })
+    tmp = await invoke('get_html', { theme: settings.theme, templateId: settings.templateId })
   } catch (e) {
     setStatus(e.toString(), 'error')
     return
@@ -284,7 +284,8 @@ async function onExportPdf() {
   try {
     const r = await invoke('preview_pdf', {
       fullWidth: settings.fullWidth,
-      theme: settings.theme
+      theme: settings.theme,
+      templateId: settings.templateId
     })
     previewState.value = r
     showPdfViewer(r)
@@ -343,7 +344,8 @@ async function onExportDoc(format) {
       await invoke('export_' + format, {
         dst: d,
         fullWidth: settings.fullWidth,
-        theme: settings.theme
+        theme: settings.theme,
+        templateId: settings.templateId
       })
     }
     setStatus('statusExportReady', 'ready')
@@ -370,7 +372,8 @@ async function onExportFolder() {
       src: folderPath.value,
       dst: d,
       fullWidth: settings.fullWidth,
-      theme: settings.theme
+      theme: settings.theme,
+      templateId: settings.templateId
     })
     setStatus(
       settings.lang === 'en'
@@ -589,6 +592,14 @@ onMounted(async () => {
   // 不重渲染则预览仍是旧主题，与设置面板所见不一致。
   // PDF 视图无需处理——它展示的是已生成的 PDF（打印样式恒为浅色）。
   settings.onThemeChange(() => {
+    if (isPdfView.value) return
+    if (!hasFile.value) return
+    loadPreview()
+  })
+
+  // 模板切换后重渲染预览：预览与导出必须用同一套模板，
+  // 不重渲染则预览仍是旧模板。PDF 视图无需处理。
+  watch(() => settings.templateId, () => {
     if (isPdfView.value) return
     if (!hasFile.value) return
     loadPreview()

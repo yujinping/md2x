@@ -23,6 +23,76 @@ mod theme_arg {
     }
 }
 
+/// 外置模板目录：`<app_data_dir>/templates`，不存在则创建。
+/// 用户把 `*.html` 模板（含 {{BODY}} 占位符）放进去即出现在模板列表里。
+fn templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录: {e}"))?;
+    let d = base.join("templates");
+    std::fs::create_dir_all(&d).map_err(|e| format!("创建模板目录失败: {e}"))?;
+    Ok(d)
+}
+
+/// 首次打开模板目录时写入的说明文件，向模板作者说明占位符契约。
+const TEMPLATES_README: &str = r#"# md2x 外置 HTML 模板
+
+把 `.html` 模板文件放入本目录（文件名去扩展名即模板名），重启或刷新模板列表后即可在设置中选择。
+
+## 占位符契约
+
+- `{{BODY}}`（必需）：正文落点；缺失该占位符的模板不会被识别
+- `{{TITLE}}`：文档标题
+- `{{TOC}}`：侧栏目录（嵌套 ul）
+- `{{PRINT_TOC}}`：打印目录页（仅 @media print 可见）
+- `{{DOC_TREE}}`：聚合导出的文档树
+- `{{SKILL_METADATA}}`：SKILL.md 元数据卡片
+- `{{THEME_LOCK}}`：主题档位（auto/light/dark 字符串）
+- `{{WIDTH_VARS}}`：全宽模式 CSS
+- `{{GITHUB_MD_CSS}}` / `{{ATOM_ONE_DARK_CSS}}` / `{{HIGHLIGHT_JS}}`：内置样式与脚本，按需取用
+
+## 注意
+
+- 模板需自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联
+- 聚合导出的文档树、主题切换等交互需模板自行支持
+"#;
+
+/// 确保模板目录存在且带有说明文件，返回目录路径。
+fn ensure_templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let d = templates_dir(app)?;
+    let readme = d.join("README.md");
+    if !readme.exists() {
+        let _ = std::fs::write(&readme, TEMPLATES_README);
+    }
+    Ok(d)
+}
+
+/// 按前端传入的模板 id 加载模板；目录不可用或 id 失效时回退内置。
+fn load_selected_template(
+    app: &tauri::AppHandle,
+    template_id: &Option<String>,
+) -> template::HtmlTemplate {
+    let id = template_id.clone().unwrap_or_default();
+    if id.is_empty() || id == template::BUILTIN_TEMPLATE_ID {
+        return template::HtmlTemplate::builtin();
+    }
+    match templates_dir(app) {
+        Ok(dir) => template::load_template(&id, &dir),
+        Err(_) => template::HtmlTemplate::builtin(),
+    }
+}
+
+/// 模板列表项（返回给设置面板）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TemplateInfo {
+    /// 模板 id："default" 或外部文件名去扩展名
+    id: String,
+    /// 是否内置模板
+    builtin: bool,
+}
+
 /// 文件树节点（目录/文件），递归描述文件夹内的 Markdown 文件
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +114,8 @@ struct CachedPreview {
     html_path: PathBuf,
     /// 生成时的全宽开关，用于缓存命中判定
     full_width: bool,
+    /// 生成时使用的模板 id：切换模板后旧缓存必须失效
+    template_id: String,
 }
 
 struct AppState {
@@ -84,14 +156,14 @@ struct PreviewResult {
 pub fn run() {
     let f = std::env::var("MD2X_GUI_FILE").ok();
     let s = AppState {
-        current_file: Mutex::new(f.as_ref().map(|s| PathBuf::from(s))),
+        current_file: Mutex::new(f.as_ref().map(PathBuf::from)),
         last_known_mtime: Mutex::new(None),
         show_about_flag: Mutex::new(false),
         settings_flag: Mutex::new(false),
         folder_root: Mutex::new(
             std::env::var("MD2X_GUI_FOLDER")
                 .ok()
-                .map(|s| PathBuf::from(s)),
+                .map(PathBuf::from),
         ),
         about_item: Mutex::new(None),
         settings_item: Mutex::new(None),
@@ -110,16 +182,14 @@ pub fn run() {
             tx: Mutex::new(None),
         })
         .on_window_event(|w, e| {
-            if let tauri::WindowEvent::DragDrop(evt) = e {
-                if let tauri::DragDropEvent::Drop { paths, .. } = evt {
-                    if let Some(p) = paths.first() {
-                        let path = p.to_string_lossy().to_string();
-                        // 通知前端等待的 wait_for_drop
-                        if let Some(state) = w.try_state::<DropChannel>() {
-                            if let Ok(mut guard) = state.tx.lock() {
-                                if let Some(tx) = guard.take() {
-                                    let _ = tx.send(path);
-                                }
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = e {
+                if let Some(p) = paths.first() {
+                    let path = p.to_string_lossy().to_string();
+                    // 通知前端等待的 wait_for_drop
+                    if let Some(state) = w.try_state::<DropChannel>() {
+                        if let Ok(mut guard) = state.tx.lock() {
+                            if let Some(tx) = guard.take() {
+                                let _ = tx.send(path);
                             }
                         }
                     }
@@ -229,6 +299,8 @@ pub fn run() {
             check_show_open_folder,
             check_show_close_folder,
             register_default_md_handler,
+            list_templates,
+            open_templates_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error")
@@ -267,7 +339,11 @@ pub fn run() {
 }
 
 /// CLI 模式：静默生成 PDF
-pub fn generate_pdf_from_file(path: &Path, full_width: bool) -> Result<PathBuf, MpeError> {
+pub fn generate_pdf_from_file(
+    path: &Path,
+    full_width: bool,
+    tpl: Option<&template::HtmlTemplate>,
+) -> Result<PathBuf, MpeError> {
     let md = std::fs::read_to_string(path)?;
     let is_skill = path
         .file_name()
@@ -286,13 +362,10 @@ pub fn generate_pdf_from_file(path: &Path, full_width: bool) -> Result<PathBuf, 
         .and_then(|s| s.to_str())
         .unwrap_or("Untitled");
     // PDF 走 @media print，模板在打印样式下恒为浅色（纸是白的），故此处不传主题
-    let f = template::render_html_template_with_metadata(
-        &h,
-        t,
-        metadata.as_ref(),
-        full_width,
-        template::Theme::Auto,
-    );
+    let f = match tpl {
+        Some(tpl) => template::render_html_with(tpl, &h, t, metadata.as_ref(), full_width, template::Theme::Auto),
+        None => template::render_html_template_with_metadata(&h, t, metadata.as_ref(), full_width, template::Theme::Auto),
+    };
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d)?;
@@ -497,10 +570,16 @@ fn check_file_changed(s: State<AppState>) -> Result<bool, String> {
 /// 生成 HTML 预览（写入临时文件，返回路径）
 /// 如果缓存命中且文件未变更，直接返回缓存的 HTML 路径
 #[tauri::command]
-fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String> {
+fn get_html(
+    theme: Option<String>,
+    template_id: Option<String>,
+    app: tauri::AppHandle,
+    s: State<AppState>,
+) -> Result<String, String> {
     // 全宽由前端在拿到 HTML 后注入 CSS 实现，后端始终渲染标准宽度
     let full_width = false;
     let theme = theme_arg::parse_opt(&theme);
+    let tpl = load_selected_template(&app, &template_id);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -513,12 +592,13 @@ fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String>
     // 获取当前文件 mtime
     let current_mtime = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
 
-    // 检查缓存：mtime 一致且 HTML 文件存在
+    // 检查缓存：mtime 一致且 HTML 文件存在，且模板未切换
     if let Some(ref mtime) = current_mtime {
         let cache = s.cached_preview.lock().map_err(|e| e.to_string())?;
         if let Some(ref cached) = *cache {
             if cached.file_mtime == *mtime
                 && cached.full_width == full_width
+                && cached.template_id == tpl.id
                 && cached.html_path.exists()
             {
                 return Ok(cached.html_path.to_string_lossy().to_string());
@@ -558,6 +638,7 @@ fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String>
                 existing.pdf_path = PathBuf::new(); // 清除 PDF 缓存，强制重新生成
                 existing.file_mtime = mtime;
                 existing.full_width = full_width;
+                existing.template_id = tpl.id.clone();
             }
             None => {
                 *cache = Some(CachedPreview {
@@ -565,6 +646,7 @@ fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String>
                     pdf_path: PathBuf::new(), // 尚无 PDF
                     html_path: hp.clone(),
                     full_width,
+                    template_id: tpl.id.clone(),
                 });
             }
         }
@@ -579,10 +661,13 @@ fn get_html(theme: Option<String>, s: State<AppState>) -> Result<String, String>
 fn preview_pdf(
     full_width: Option<bool>,
     theme: Option<String>,
+    template_id: Option<String>,
+    app: tauri::AppHandle,
     s: State<AppState>,
 ) -> Result<PreviewResult, String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
+    let tpl = load_selected_template(&app, &template_id);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur.as_ref().ok_or_else(|| "No file".to_string())?.clone();
     let file_stem = p
@@ -604,6 +689,7 @@ fn preview_pdf(
         if let Some(ref cached) = *cache {
             if cached.file_mtime == current_mtime
                 && cached.full_width == full_width
+                && cached.template_id == tpl.id
                 && cached.pdf_path.exists()
             {
                 let pd =
@@ -633,7 +719,7 @@ fn preview_pdf(
         converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, &p);
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width, theme);
+    let fh = template::render_html_with(&tpl, &hb, t, metadata.as_ref(), full_width, theme);
 
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -655,6 +741,7 @@ fn preview_pdf(
             pdf_path: pp.clone(),
             html_path: hp,
             full_width,
+            template_id: tpl.id.clone(),
         });
     }
 
@@ -678,6 +765,7 @@ fn render_full_html(
     p: &Path,
     full_width: bool,
     theme: template::Theme,
+    tpl: &template::HtmlTemplate,
 ) -> Result<String, String> {
     let md = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
     let is_skill = p
@@ -694,13 +782,38 @@ fn render_full_html(
         converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
     let hb = converter::resolve_image_srcs(&hb, p);
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    Ok(template::render_html_template_with_metadata(
-        &hb,
-        t,
-        metadata.as_ref(),
-        full_width,
-        theme,
-    ))
+    Ok(template::render_html_with(tpl, &hb, t, metadata.as_ref(), full_width, theme))
+}
+
+/// 列出可用模板：内置 + 外置目录扫描（只收含 {{BODY}} 的 *.html）
+#[tauri::command]
+fn list_templates(app: tauri::AppHandle) -> Result<Vec<TemplateInfo>, String> {
+    let mut out = vec![TemplateInfo {
+        id: template::BUILTIN_TEMPLATE_ID.to_string(),
+        builtin: true,
+    }];
+    let dir = ensure_templates_dir(&app)?;
+    for t in template::scan_external_templates(&dir) {
+        out.push(TemplateInfo {
+            id: t.id,
+            builtin: false,
+        });
+    }
+    Ok(out)
+}
+
+/// 打开外置模板目录（不存在则创建，并写入契约说明 README）
+#[tauri::command]
+fn open_templates_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = ensure_templates_dir(&app)?;
+    #[cfg(target_os = "macos")]
+    let ok = std::process::Command::new("open").arg(&dir).status();
+    #[cfg(target_os = "windows")]
+    let ok = std::process::Command::new("explorer").arg(&dir).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let ok = std::process::Command::new("xdg-open").arg(&dir).status();
+    ok.map_err(|e| format!("打开目录失败: {e}"))?;
+    Ok(())
 }
 
 /// 导出 HTML 到用户指定位置
@@ -709,17 +822,20 @@ fn export_html(
     dst: String,
     full_width: Option<bool>,
     theme: Option<String>,
+    template_id: Option<String>,
+    app: tauri::AppHandle,
     s: State<AppState>,
 ) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
+    let tpl = load_selected_template(&app, &template_id);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p, full_width, theme)?;
+    let html = render_full_html(&p, full_width, theme, &tpl)?;
     std::fs::write(&dst, html).map_err(|e| format!("导出失败: {e}"))?;
     Ok(())
 }
@@ -733,15 +849,18 @@ fn export_folder_html(
     dst: String,
     full_width: Option<bool>,
     theme: Option<String>,
+    template_id: Option<String>,
+    app: tauri::AppHandle,
     format: Option<String>,
 ) -> Result<usize, String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
+    let tpl = load_selected_template(&app, &template_id);
     let root = PathBuf::from(&src);
     if !root.is_dir() {
         return Err(format!("不是有效的文件夹: {}", root.display()));
     }
-    let result = md2x_core::aggregate::aggregate_folder_to_html(&root, full_width, theme)
+    let result = md2x_core::aggregate::aggregate_folder_to_html(&root, full_width, theme, Some(&tpl))
         .map_err(|e| format!("导出失败: {e}"))?;
 
     let fmt = format.unwrap_or_else(|| "html".to_string());
@@ -781,17 +900,20 @@ fn export_pdf(
     dst: String,
     full_width: Option<bool>,
     theme: Option<String>,
+    template_id: Option<String>,
+    app: tauri::AppHandle,
     s: State<AppState>,
 ) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
+    let tpl = load_selected_template(&app, &template_id);
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
     let p = cur
         .as_ref()
         .ok_or_else(|| "没有打开文件".to_string())?
         .clone();
     drop(cur);
-    let html = render_full_html(&p, full_width, theme)?;
+    let html = render_full_html(&p, full_width, theme, &tpl)?;
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let hp = d.join("export-tmp.html");
@@ -925,8 +1047,8 @@ fn scan_tree(dir: &Path) -> Result<Vec<TreeNode>, String> {
         // 符号链接不追踪，避免循环；指向 .md 的链接按非目录跳过
     }
     // 目录优先，各自按名称排序
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
     dirs.extend(files);
     Ok(dirs)
 }
