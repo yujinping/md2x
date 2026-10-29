@@ -1,4 +1,4 @@
-## [unreleased]
+## [1.1.2] - 2026-10-29
 
 ### 🚀 Features
 
@@ -20,6 +20,7 @@
 
 - Upgrade Node.js version from 22 to 24
 - *(release)* 发版脚本同步前端 package.json 版本号
+- Release v1.1.2
 ## [1.0.0] - 2026-10-29
 
 ### 🚀 Features
