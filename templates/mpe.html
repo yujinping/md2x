@@ -296,47 +296,49 @@
       background: var(--accent);
     }
 
-    /* ========== 侧栏切换按钮 ========== */
+    /* ========== 目录树切换按钮 ==========
+       与主题/全屏/回顶同列，排在主题与全屏之间。
+       原先贴在侧栏右缘（left 随侧栏宽度变化），收起时还会跳到窗口左边缘——
+       三个浮动控件分居两侧，视线要来回找；现在统一收到右侧竖排。
+       位置与另两个按钮一致：40×40、圆形、同样的底与描边。 */
     .sidebar-toggle {
       position: fixed;
-      top: 14px;
-      left: 268px;
-      z-index: 200;
-      width: 34px;
-      height: 34px;
+      right: 32px;
+      bottom: 144px;
+      z-index: 300;
+      width: 40px;
+      height: 40px;
       border: 1px solid var(--border-strong);
-      border-radius: 8px;
-      background: var(--bg-panel);
+      border-radius: 50%;
+      background: var(--bg-float);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       cursor: pointer;
-      font-size: 20px;
-      line-height: 1;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: var(--fg-muted);
-      transition: left 0.25s ease, background 0.15s, box-shadow 0.15s;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-      user-select: none;
-      padding: 0;
+      color: var(--accent);
+      transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+      box-shadow: var(--shadow-float);
       outline: none;
-      font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-      letter-spacing: 1px;
-    }
-    .sidebar-toggle.resizing {
-      transition: none !important;
+      padding: 0;
     }
     .sidebar-toggle:hover {
-      background: var(--bg-hover);
-      color: var(--accent);
-      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      background: var(--bg-float-hover);
+      border-color: var(--accent);
+      box-shadow: 0 4px 14px rgba(99,102,241,0.2);
     }
     .sidebar-toggle:active {
-      background: var(--bg-active);
-      transform: scale(0.95);
+      transform: scale(0.92);
     }
-    /* 侧栏收起时按钮移动到左边缘 */
-    body.sidebar-collapsed .sidebar-toggle {
-      left: 14px !important;
+    .sidebar-toggle svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
     }
     body.sidebar-collapsed .sidebar-resizer {
       display: none !important;
@@ -873,11 +875,11 @@
       fill: none;
     }
     /* ========== 主题切换按钮 ========== */
-    /* 与全屏(92px)、回到顶部(40px) 同列，排在最上方，间距 52px 保持一致 */
+    /* 右侧竖排浮层自上而下：主题(196) / 目录(144) / 全屏(92) / 回顶(40)，间距 52px */
     .theme-toggle {
       position: fixed;
       right: 32px;
-      bottom: 144px;
+      bottom: 196px;
       z-index: 300;
       width: 40px;
       height: 40px;
@@ -925,10 +927,15 @@
     html[data-theme="dark"] .theme-toggle .icon-sun {
       display: block;
     }
-    /* 全屏时三个按钮统一移到右上角纵向排列 */
+    /* 全屏时四个按钮统一移到右上角纵向排列 */
     body.fs-active .theme-toggle {
       bottom: auto;
-      top: 64px;
+      top: 120px;
+      right: 16px;
+    }
+    body.fs-active .sidebar-toggle {
+      bottom: auto;
+      top: 68px;
       right: 16px;
     }
     body.fs-active .fullscreen-toggle {
@@ -940,13 +947,12 @@
       bottom: 24px;
       right: 24px;
     }
-    /* 全屏时布局撑满视口 */
-    body.fs-active .layout,
-    body.fs-active .sidebar,
-    body.fs-active .main-content {
-      min-height: 100vh;
-      height: 100vh;
-    }
+    /* 全屏不需要额外撑高：基础样式里的 min-height: 100vh 已经保证铺满视口。
+       这里曾写死 height: 100vh，把 .layout 压成一个视口高 ——
+       position: sticky 的 .sidebar 因此失去可粘滞的滚动余量，会跟着正文一起滚走，
+       表现为「左侧目录列与分割线到不了页面底部」；
+       .main-content 同样被截断，其背景只画满第一屏，
+       往下就露出 body 的 --bg 底色（比 --bg-panel 灰一档），即「只有第一屏背景色对」。 */
     /* 不支持全屏 API（如 iframe 沙箱）时隐藏按钮，避免给出无效入口 */
     .fullscreen-unsupported .fullscreen-toggle {
       display: none;
@@ -1133,14 +1139,16 @@
         display: block;
         opacity: 1;
       }
-      /* 切换按钮：固定在左上角，触控目标放大到 44px（iOS 建议值） */
+      /* 切换按钮：移动端仍是抽屉的开启入口，留在左上角（抽屉从左滑出，
+         放到右侧反而指错方向），触控目标放大到 44px（iOS 建议值） */
       .sidebar-toggle,
       body.sidebar-collapsed .sidebar-toggle {
         left: 12px !important;
+        right: auto !important;
         top: max(12px, env(safe-area-inset-top, 0px));
+        bottom: auto !important;
         width: 44px;
         height: 44px;
-        font-size: 22px;
         z-index: 420;
       }
       .sidebar-resizer {
@@ -1442,7 +1450,9 @@
   </style>
 </head>
 <body>
-  <button class="sidebar-toggle" id="sidebarToggle" title="切换目录" aria-label="切换目录">三</button>
+  <button class="sidebar-toggle" id="sidebarToggle" title="显示/隐藏目录" aria-label="显示/隐藏目录" aria-expanded="true">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>
+  </button>
   <div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
   <div class="layout">
     <!-- 侧边栏 TOC -->
@@ -1637,17 +1647,17 @@
           localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebar.offsetWidth);
           sidebar.style.width = '0px';
           sidebar.style.padding = '32px 0px';
-          toggleBtn.style.left = '14px';
+          // 按钮已固定收在右侧浮层，不再跟随侧栏宽度移动
           if (resizer) resizer.style.display = 'none';
         } else {
           var w = getSavedWidth();
           sidebar.style.width = w + 'px';
           sidebar.style.padding = '';
-          toggleBtn.style.left = (w + 8) + 'px';
           if (resizer) {
             resizer.style.display = '';
           }
         }
+        toggleBtn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
       });
 
       // 点击遮罩关闭抽屉
@@ -1715,7 +1725,6 @@
           startW = sidebar.offsetWidth;
           resizer.classList.add('active');
           sidebar.classList.add('resizing');
-          toggleBtn.classList.add('resizing');
           document.body.style.cursor = 'col-resize';
           document.body.style.userSelect = 'none';
           e.preventDefault();
@@ -1733,7 +1742,6 @@
           isResizing = false;
           resizer.classList.remove('active');
           sidebar.classList.remove('resizing');
-          toggleBtn.classList.remove('resizing');
           document.body.style.cursor = '';
           document.body.style.userSelect = '';
           localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebar.offsetWidth);
@@ -1873,10 +1881,19 @@
     });
 
     // ==================== 全屏 ====================
-    // 使用标准 Fullscreen API + webkit 前缀；不支持时隐藏按钮
+    // 原生 Fullscreen API 优先；应用内预览（iframe）走宿主接管；两者都不可用才隐藏按钮
     var fsBtn = document.getElementById('fullscreenToggle');
     var fsIcon = document.getElementById('fullscreenIcon');
-    // 收集各浏览器的全屏入口，兼容旧版webkit /moz/ms 实现
+    // 全屏元素必须**现取**：它只在进出全屏时才变化，缓存一次会永远是初始的 null，
+    // 结果就是「点了只会进、退不出去」，按钮文案与图标也永远不翻。
+    function fsCurrent() {
+      return document.fullscreenElement
+        || document.webkitFullscreenElement
+        || document.mozFullScreenElement
+        || document.msFullscreenElement
+        || null;
+    }
+    // 收集各浏览器的全屏入口，兼容旧版 webkit / moz / ms 实现
     var fsRequest = document.documentElement.requestFullscreen
       || document.documentElement.webkitRequestFullscreen
       || document.documentElement.mozRequestFullScreen
@@ -1885,18 +1902,17 @@
       || document.webkitExitFullscreen
       || document.mozCancelFullScreen
       || document.msExitFullscreen;
-    var fsElement = document.fullscreenElement
-      || document.webkitFullscreenElement
-      || document.mozFullScreenElement
-      || document.msFullscreenElement;
+
+    // 是否被宿主页面嵌入（md2x 桌面端的预览 iframe）
+    var inFrame = false;
+    try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
 
     // 展开态图标（四角向内）与收起态图标（四角向外）
     var ICON_ENTER = 'M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3';
     var ICON_EXIT = 'M3 8h3a2 2 0 0 0 2-2V3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M21 16h-3a2 2 0 0 0-2 2v3';
 
-    function syncFullscreenUI() {
-      var active = !!fsElement;
-      document.body.classList.toggle('fs-active', active);
+    function setFullscreenUI(active) {
+      document.body.classList.toggle('fs-active', !!active);
       if (fsBtn) {
         fsBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         fsBtn.setAttribute('aria-label', active ? '退出全屏' : '全屏');
@@ -1907,28 +1923,44 @@
       }
     }
 
-    if (fsBtn && fsRequest && fsExit) {
-      fsBtn.addEventListener('click', function() {
-        try {
-          if (fsElement) {
-            var p = fsExit.call(document);
-            if (p && p.catch) p.catch(function() {});
-          } else {
-            var p = fsRequest.call(document.documentElement);
-            if (p && p.catch) p.catch(function() {});
+    if (fsBtn) {
+      if (fsRequest && fsExit) {
+        fsBtn.addEventListener('click', function () {
+          try {
+            if (fsCurrent()) {
+              var quit = fsExit.call(document);
+              if (quit && quit.catch) quit.catch(function () {});
+            } else {
+              var enter = fsRequest.call(document.documentElement);
+              if (enter && enter.catch) enter.catch(function () {});
+            }
+          } catch (e) {
+            /* 权限策略拒绝全屏时静默失败，按钮状态由 fullscreenchange 校正 */
           }
-        } catch (e) {
-          /* 权限策略拒绝全屏时静默失败，按钮状态由 fullscreenchange 校正 */
-        }
-      });
-      // 统一用fullscreenchange 同步，Esc 退出时也能正确复位
-      document.addEventListener('fullscreenchange', syncFullscreenUI);
-      document.addEventListener('webkitfullscreenchange', syncFullscreenUI);
-      document.addEventListener('mozfullscreenchange', syncFullscreenUI);
-      document.addEventListener('MSFullscreenChange', syncFullscreenUI);
-      syncFullscreenUI();
-    } else if (fsBtn) {
-      document.body.classList.add('fullscreen-unsupported');
+        });
+        // 统一用 fullscreenchange 同步，Esc 退出时也能正确复位
+        var onFsChange = function () { setFullscreenUI(!!fsCurrent()); };
+        document.addEventListener('fullscreenchange', onFsChange);
+        document.addEventListener('webkitfullscreenchange', onFsChange);
+        document.addEventListener('mozfullscreenchange', onFsChange);
+        document.addEventListener('MSFullscreenChange', onFsChange);
+        setFullscreenUI(!!fsCurrent());
+      } else if (inFrame) {
+        // 宿主接管：macOS 12 的 WKWebView 没有 Element.requestFullscreen，
+        // iframe 内又受权限策略限制，文档级全屏走不通。
+        // 点击 → 由父窗口切换**整窗**全屏；状态由父窗口回传（md2x-fullscreen-state），
+        // 因此 Esc / 菜单 / 快捷键改变的状态也能反映到图标上。
+        fsBtn.addEventListener('click', function () {
+          try { parent.postMessage({ type: 'md2x-fullscreen-toggle' }, '*'); } catch (e) {}
+        });
+        window.addEventListener('message', function (e) {
+          var d = e.data;
+          if (d && d.type === 'md2x-fullscreen-state') setFullscreenUI(!!d.active);
+        });
+      } else {
+        // 既无原生 API、又没有宿主：确实没有可用入口，隐藏按钮而不是给个死按钮
+        document.body.classList.add('fullscreen-unsupported');
+      }
     }
 
     // ==================== 回到顶部 ====================
