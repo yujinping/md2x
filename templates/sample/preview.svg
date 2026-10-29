@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 300" width="480" height="300" role="img" aria-label="简约排版模版预览">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f7f8fa"/>
+      <stop offset="100%" stop-color="#eceef2"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="300" fill="url(#bg)"/>
+  <!-- 页面纸张 -->
+  <rect x="96" y="18" width="288" height="284" rx="6" fill="#ffffff" stroke="#d8dce3"/>
+  <!-- 标题 -->
+  <rect x="124" y="46" width="150" height="12" rx="3" fill="#1f2328"/>
+  <rect x="124" y="66" width="232" height="2" rx="1" fill="#d1d9e0"/>
+  <!-- 目录框 -->
+  <rect x="124" y="82" width="232" height="66" rx="6" fill="#f6f7f9" stroke="#d1d9e0"/>
+  <rect x="138" y="94" width="34" height="5" rx="2.5" fill="#9aa2ad"/>
+  <rect x="138" y="108" width="120" height="5" rx="2.5" fill="#b8bfc9"/>
+  <rect x="152" y="120" width="96" height="5" rx="2.5" fill="#c7ccd4"/>
+  <rect x="138" y="132" width="104" height="5" rx="2.5" fill="#b8bfc9"/>
+  <!-- 正文 -->
+  <g fill="#c7ccd4">
+    <rect x="124" y="166" width="232" height="5" rx="2.5"/>
+    <rect x="124" y="178" width="216" height="5" rx="2.5"/>
+    <rect x="124" y="190" width="228" height="5" rx="2.5"/>
+    <rect x="124" y="202" width="180" height="5" rx="2.5"/>
+  </g>
+  <rect x="124" y="220" width="96" height="7" rx="3.5" fill="#1f2328"/>
+  <g fill="#d5dae1">
+    <rect x="124" y="238" width="232" height="5" rx="2.5"/>
+    <rect x="124" y="250" width="200" height="5" rx="2.5"/>
+    <rect x="124" y="262" width="222" height="5" rx="2.5"/>
+  </g>
+  <!-- 左右留白暗示单栏窄幅 -->
+  <rect x="0" y="0" width="96" height="300" fill="none"/>
+</svg>

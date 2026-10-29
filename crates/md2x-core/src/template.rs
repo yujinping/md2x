@@ -1,10 +1,55 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 use crate::error::MpeError;
 
 /// 内置默认模板的 id。设置面板、CLI 均用该 id 指代编译进二进制的 mpe.html。
 pub const BUILTIN_TEMPLATE_ID: &str = "default";
+
+/// 模版包目录内固定的正文文件名。
+///
+/// 目录名即模版 id，目录内用固定文件名而非「任意 *.html」，是为了让扫描器
+/// 无需猜测哪个文件才是入口——与 AI Skill 用 `SKILL.md` 作固定入口同理。
+pub const TEMPLATE_HTML: &str = "template.html";
+
+/// 模版包元数据文件名（JSON），与 `template.html` 同级。
+pub const TEMPLATE_MANIFEST: &str = "template.json";
+
+/// 约定的缩略图文件名，按数组顺序探测，命中第一个即用。
+///
+/// 清单里的 `preview` 字段可覆盖本约定，用于缩略图不叫这些名字的场景。
+const PREVIEW_NAMES: [&str; 5] = [
+    "preview.png",
+    "preview.jpg",
+    "preview.jpeg",
+    "preview.webp",
+    "preview.svg",
+];
+
+/// 缩略图内联上限：缩略图只用于列表展示，超过这个尺寸说明放错了文件
+const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 模版包清单（`template.json`）。
+///
+/// 全部字段可缺省：模版作者可以只放 `template.html` 就让模版可用，
+/// 此时名称取目录名、缩略图按约定名探测。未知字段直接忽略，
+/// 便于未来给清单加字段而不破坏旧模版。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TemplateManifest {
+    /// 展示名（缺省取目录名）
+    pub name: Option<String>,
+    /// 一句话描述，展示在模版卡片上
+    pub description: Option<String>,
+    /// 版本号，纯展示用途
+    pub version: Option<String>,
+    /// 作者
+    pub author: Option<String>,
+    /// 缩略图文件名（相对模版目录）；缺省按 [`PREVIEW_NAMES`] 约定探测
+    pub preview: Option<String>,
+}
 
 /// 一个可渲染的 HTML 模板：完整 HTML 文档，内含占位符（{{BODY}}、{{TITLE}} 等）。
 ///
@@ -31,6 +76,16 @@ impl HtmlTemplate {
         }
     }
 
+    /// 从外部路径加载模板：既接受模版包目录（内含 `template.html`），也接受单个 HTML 文件。
+    ///
+    /// 目录形态是当前约定，单文件形态是旧版遗留（设置里已存在的旧模版不能因此失效）。
+    pub fn from_path(path: &Path) -> Result<Self, MpeError> {
+        if path.is_dir() {
+            return Self::from_file(&path.join(TEMPLATE_HTML));
+        }
+        Self::from_file(path)
+    }
+
     /// 从外部文件加载模板：读文件并校验 `{{BODY}}` 占位符。
     /// 文件缺失或校验失败均报错，由调用方决定回退策略（GUI 回退内置，CLI 直接报错退出）。
     pub fn from_file(path: &Path) -> Result<Self, MpeError> {
@@ -41,11 +96,20 @@ impl HtmlTemplate {
                 path.display()
             )));
         }
-        let id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("external")
-            .to_string();
+        // id 取「模版包目录名」或「文件名去扩展名」：入口文件叫 template.html 时
+        // 文件名恒为 template，只能退到父目录名才能拿到有意义的 id
+        let is_pkg_entry = path.file_name().and_then(|n| n.to_str()) == Some(TEMPLATE_HTML);
+        let id = if is_pkg_entry {
+            path.parent()
+                .and_then(|d| d.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("external")
+        } else {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("external")
+        }
+        .to_string();
         Ok(HtmlTemplate {
             id,
             source: path.to_string_lossy().to_string(),
@@ -64,16 +128,105 @@ pub fn is_valid_template(html: &str) -> bool {
     html.contains("{{BODY}}")
 }
 
-/// 外部模板扫描结果：id（文件名去扩展名）与文件路径
+/// 扫描到的一个模版包/模版文件。
+///
+/// 字段在扫描阶段就解析完毕，调用方（GUI 设置面板、CLI）不必再次读盘。
 #[derive(Debug, Clone)]
-pub struct ExternalTemplateInfo {
+pub struct TemplateEntry {
+    /// 模版 id：模版包目录名，或旧式单文件模版的文件名去扩展名
     pub id: String,
-    pub path: PathBuf,
+    /// 展示名：清单 `name`，缺省为 id
+    pub name: String,
+    /// 一句话描述，缺省空串
+    pub description: String,
+    /// 版本号，缺省空串
+    pub version: String,
+    /// 作者，缺省空串
+    pub author: String,
+    /// 是否为目录式模版包（false 表示旧式单文件模版）
+    pub packaged: bool,
+    /// 模版 HTML 文件路径
+    pub html_path: PathBuf,
+    /// 缩略图路径；无缩略图时为 None，由前端渲染占位图
+    pub preview: Option<PathBuf>,
 }
 
-/// 扫描外部模板目录下可用的模板（*.html 且含 {{BODY}}），按文件名排序。
-/// 目录不存在时返回空列表，不报错——外置模板是可选能力。
-pub fn scan_external_templates(dir: &Path) -> Vec<ExternalTemplateInfo> {
+/// 读取模版包目录；`template.html` 缺失或不合格时返回 None（不进入列表）。
+fn read_package(dir: &Path) -> Option<TemplateEntry> {
+    let html_path = dir.join(TEMPLATE_HTML);
+    let html = std::fs::read_to_string(&html_path).ok()?;
+    if !is_valid_template(&html) {
+        return None;
+    }
+    let id = dir.file_name()?.to_str()?.to_string();
+    // 清单损坏不应让模版不可用：解析失败时按「无元数据」处理
+    let manifest = read_manifest(dir).unwrap_or_default();
+    let name = manifest
+        .name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| id.clone());
+    let preview = manifest
+        .preview
+        .and_then(|p| {
+            let p = dir.join(p);
+            p.is_file().then_some(p)
+        })
+        .or_else(|| {
+            PREVIEW_NAMES
+                .iter()
+                .map(|n| dir.join(n))
+                .find(|p| p.is_file())
+        });
+    Some(TemplateEntry {
+        id,
+        name,
+        description: manifest.description.unwrap_or_default(),
+        version: manifest.version.unwrap_or_default(),
+        author: manifest.author.unwrap_or_default(),
+        packaged: true,
+        html_path,
+        preview,
+    })
+}
+
+/// 读取并解析模版包清单，缺失或非法 JSON 均返回 None
+fn read_manifest(dir: &Path) -> Option<TemplateManifest> {
+    let raw = std::fs::read_to_string(dir.join(TEMPLATE_MANIFEST)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// 读取旧式单文件模版（`<id>.html` 直接放在模版根目录）
+fn read_flat(path: &Path) -> Option<TemplateEntry> {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| !e.eq_ignore_ascii_case("html"))
+        .unwrap_or(true)
+    {
+        return None;
+    }
+    let html = std::fs::read_to_string(path).ok()?;
+    if !is_valid_template(&html) {
+        return None;
+    }
+    let id = path.file_stem()?.to_str()?.to_string();
+    Some(TemplateEntry {
+        name: id.clone(),
+        id,
+        description: String::new(),
+        version: String::new(),
+        author: String::new(),
+        packaged: false,
+        html_path: path.to_path_buf(),
+        preview: None,
+    })
+}
+
+/// 扫描模版根目录，识别其中的模版包（子目录）与旧式单文件模版。
+///
+/// 目录不存在时返回空列表，不报错——外置模版是可选能力。
+/// 结果按展示名排序（忽略大小写），名称相同时按 id 兜底，保证顺序稳定。
+pub fn scan_templates(dir: &Path) -> Vec<TemplateEntry> {
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -81,38 +234,68 @@ pub fn scan_external_templates(dir: &Path) -> Vec<ExternalTemplateInfo> {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("html")) != Some(true)
-        {
-            continue;
-        }
-        let ok = std::fs::read_to_string(&p)
-            .map(|s| is_valid_template(&s))
-            .unwrap_or(false);
-        if !ok {
-            continue;
-        }
-        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-            out.push(ExternalTemplateInfo {
-                id: stem.to_string(),
-                path: p,
-            });
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let found = if is_dir {
+            read_package(&p)
+        } else {
+            read_flat(&p)
+        };
+        if let Some(e) = found {
+            out.push(e);
         }
     }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.id.cmp(&b.id))
+    });
     out
+}
+
+/// 把缩略图内联为 data URL。
+///
+/// GUI 前端无法直接引用本地文件路径（asset 协议需要额外授权与 scope 配置），
+/// 而缩略图只用于列表面板，直接编码进返回值最简单可靠。
+/// 非图片扩展名或超过 [`MAX_PREVIEW_BYTES`] 时返回 None，由前端渲染占位图。
+pub fn preview_data_url(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        _ => return None,
+    };
+    if std::fs::metadata(path).ok()?.len() > MAX_PREVIEW_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!(
+        "data:{};base64,{}",
+        mime,
+        crate::converter::base64_encode(&bytes)
+    ))
 }
 
 /// 按 id 加载模板，永不失败：
 /// - "default" / 空 → 内置模板
-/// - 其他 id → 外部目录下 `<id>.html`；文件缺失或校验失败时回退内置
+/// - 其他 id → `<dir>/<id>/template.html`，其次旧式 `<dir>/<id>.html`；
+///   均缺失或校验失败时回退内置
 ///
 /// 刻意宽松：设置里残留的失效 id 不应导致预览/导出失败。
 pub fn load_template(id: &str, external_dir: &Path) -> HtmlTemplate {
     if id.is_empty() || id == BUILTIN_TEMPLATE_ID {
         return HtmlTemplate::builtin();
     }
-    let path = external_dir.join(format!("{}.html", id));
-    HtmlTemplate::from_file(&path).unwrap_or_else(|_| HtmlTemplate::builtin())
+    let pkg = external_dir.join(id);
+    if pkg.join(TEMPLATE_HTML).is_file() {
+        if let Ok(t) = HtmlTemplate::from_file(&pkg.join(TEMPLATE_HTML)) {
+            return t;
+        }
+    }
+    HtmlTemplate::from_file(&external_dir.join(format!("{}.html", id)))
+        .unwrap_or_else(|_| HtmlTemplate::builtin())
 }
 
 /// 主题档位。
@@ -854,15 +1037,179 @@ mod tests {
         std::fs::write(dir.join("a.html"), "<html><body>{{BODY}}</body></html>").unwrap();
         std::fs::write(dir.join("bad.html"), "<html><body>x</body></html>").unwrap();
         std::fs::write(dir.join("note.txt"), "{{BODY}}").unwrap();
-        let found = scan_external_templates(&dir);
+        let found = scan_templates(&dir);
         let ids: Vec<&str> = found.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["a", "b"], "无效文件与非 html 应被排除，且按名称排序");
+        assert_eq!(
+            ids,
+            vec!["a", "b"],
+            "无效文件与非 html 应被排除，且按名称排序"
+        );
     }
 
     #[test]
     fn 扫描不存在的目录返回空() {
         let dir = std::env::temp_dir().join("md2x-tpl-test-no-such-dir-xyz");
-        assert!(scan_external_templates(&dir).is_empty());
+        assert!(scan_templates(&dir).is_empty());
+    }
+
+    // ===== 模版包（目录 + template.html + template.json + 缩略图） =====
+
+    /// 构造一个模版包目录，返回其根目录（调用方再往里塞文件）
+    fn pkg_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("md2x-tpl-pkg-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_pkg(root: &Path, id: &str, manifest: Option<&str>, preview: Option<&str>) {
+        let d = root.join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(TEMPLATE_HTML), "<html><body>{{BODY}}</body></html>").unwrap();
+        if let Some(m) = manifest {
+            std::fs::write(d.join(TEMPLATE_MANIFEST), m).unwrap();
+        }
+        if let Some(p) = preview {
+            std::fs::write(d.join(p), b"\x89PNG\r\n\x1a\n").unwrap();
+        }
+    }
+
+    #[test]
+    fn 模版包按清单解析元数据与约定缩略图() {
+        let root = pkg_root("meta");
+        write_pkg(
+            &root,
+            "paper",
+            Some(
+                r#"{"name":"论文体","description":"学术排版","version":"1.2.0","author":"yujinping"}"#,
+            ),
+            Some("preview.png"),
+        );
+        let found = scan_templates(&root);
+        assert_eq!(found.len(), 1);
+        let e = &found[0];
+        assert_eq!(e.id, "paper", "id 取目录名");
+        assert_eq!(e.name, "论文体", "展示名优先取清单");
+        assert_eq!(e.description, "学术排版");
+        assert_eq!(e.version, "1.2.0");
+        assert_eq!(e.author, "yujinping");
+        assert!(e.packaged);
+        assert_eq!(
+            e.preview.as_deref(),
+            Some(root.join("paper/preview.png").as_path())
+        );
+    }
+
+    #[test]
+    fn 缺清单时以目录名为名且仍可用() {
+        // 作者可以只放 template.html：能列出、能选中，只是没有描述与缩略图
+        let root = pkg_root("no-manifest");
+        write_pkg(&root, "plain", None, None);
+        let found = scan_templates(&root);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "plain");
+        assert!(found[0].description.is_empty());
+        assert!(found[0].preview.is_none());
+    }
+
+    #[test]
+    fn 清单非法json时退化为无元数据() {
+        let root = pkg_root("bad-json");
+        write_pkg(&root, "broken", Some("{ not json"), None);
+        let found = scan_templates(&root);
+        assert_eq!(found.len(), 1, "清单损坏不应让模版从列表消失");
+        assert_eq!(found[0].name, "broken");
+    }
+
+    #[test]
+    fn 清单preview字段可指定非约定缩略图名() {
+        let root = pkg_root("custom-preview");
+        write_pkg(
+            &root,
+            "custom",
+            Some(r#"{"preview":"shot.webp"}"#),
+            Some("shot.webp"),
+        );
+        let found = scan_templates(&root);
+        assert_eq!(
+            found[0].preview.as_deref(),
+            Some(root.join("custom/shot.webp").as_path())
+        );
+    }
+
+    #[test]
+    fn 缺template_html的目录不进列表() {
+        let root = pkg_root("missing-html");
+        let d = root.join("empty");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(TEMPLATE_MANIFEST), r#"{"name":"x"}"#).unwrap();
+        // 入口文件名写错（index.html）同样不算模版包：约定即固定名
+        let d2 = root.join("wrong-entry");
+        std::fs::create_dir_all(&d2).unwrap();
+        std::fs::write(d2.join("index.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        assert!(scan_templates(&root).is_empty());
+    }
+
+    #[test]
+    fn 模版包与旧式单文件模版可共存并按名排序() {
+        let root = pkg_root("mixed");
+        write_pkg(&root, "zeta", Some(r#"{"name":"A 模版"}"#), None);
+        std::fs::write(
+            root.join("legacy.html"),
+            "<html><body>{{BODY}}</body></html>",
+        )
+        .unwrap();
+        let found = scan_templates(&root);
+        let ids: Vec<&str> = found.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["zeta", "legacy"],
+            "按展示名排序，A 模版 在 legacy 之前"
+        );
+        assert!(!found[1].packaged, "旧式单文件应标记为非模版包");
+    }
+
+    #[test]
+    fn load_template命中模版包入口() {
+        let root = pkg_root("load-pkg");
+        write_pkg(&root, "paper", None, None);
+        let t = load_template("paper", &root);
+        assert_eq!(t.id, "paper", "id 应为目录名而非 template");
+    }
+
+    #[test]
+    fn from_path接受模版包目录与单文件() {
+        let root = pkg_root("from-path");
+        write_pkg(&root, "paper", None, None);
+        assert_eq!(
+            HtmlTemplate::from_path(&root.join("paper")).unwrap().id,
+            "paper"
+        );
+        assert_eq!(
+            HtmlTemplate::from_path(&root.join("paper/template.html"))
+                .unwrap()
+                .id,
+            "paper"
+        );
+        std::fs::write(root.join("flat.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        assert_eq!(
+            HtmlTemplate::from_path(&root.join("flat.html")).unwrap().id,
+            "flat"
+        );
+    }
+
+    #[test]
+    fn 缩略图编码为data_url并按扩展名判mime() {
+        let root = pkg_root("preview-url");
+        let p = root.join("preview.png");
+        std::fs::write(&p, b"hi").unwrap();
+        let url = preview_data_url(&p).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(url.ends_with("aGk="), "内容应为 hi 的 base64");
+        // 非图片扩展名不编码，避免把任意文件塞进 img src
+        let txt = root.join("note.txt");
+        std::fs::write(&txt, b"x").unwrap();
+        assert!(preview_data_url(&txt).is_none());
     }
 
     #[test]

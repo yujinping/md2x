@@ -280,8 +280,10 @@ pub(crate) fn download_image_bytes(url: &str) -> Option<(Vec<u8>, String)> {
     Some((body, mime))
 }
 
-/// 极简 base64 编码（无依赖）
-fn base64_encode(data: &[u8]) -> String {
+/// 极简 base64 编码（无依赖）。
+///
+/// 除图片内联外，模版缩略图也复用本函数编码为 data URL，故对外可见。
+pub fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {

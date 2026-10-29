@@ -23,9 +23,18 @@ mod theme_arg {
     }
 }
 
-/// 外置模板目录：`<app_data_dir>/templates`，不存在则创建。
-/// 用户把 `*.html` 模板（含 {{BODY}} 占位符）放进去即出现在模板列表里。
+/// 约定模版目录：默认 `<app_data_dir>/templates`，可用环境变量 `MD2X_TEMPLATE_DIR` 覆盖。
+///
+/// 覆盖入口用于并行维护多套模版（例如设计评审时比对配色），也是自动化测试
+/// 注入夹具的通道——不必触碰真实用户目录。目录不存在则创建。
 fn templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    if let Ok(custom) = std::env::var("MD2X_TEMPLATE_DIR") {
+        if !custom.trim().is_empty() {
+            let d = PathBuf::from(custom.trim());
+            std::fs::create_dir_all(&d).map_err(|e| format!("创建模板目录失败: {e}"))?;
+            return Ok(d);
+        }
+    }
     let base = app
         .path()
         .app_data_dir()
@@ -35,16 +44,47 @@ fn templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(d)
 }
 
-/// 首次打开模板目录时写入的说明文件，向模板作者说明占位符契约。
-const TEMPLATES_README: &str = r#"# md2x 外置 HTML 模板
+/// 首次打开模板目录时写入的说明文件，向模板作者说明模版包约定与占位符契约。
+const TEMPLATES_README: &str = r#"# md2x 模版目录
 
-把 `.html` 模板文件放入本目录（文件名去扩展名即模板名），重启或刷新模板列表后即可在设置中选择。
+本目录下**每个子目录即一个模版包**，模版列表自动扫描，放入后点「刷新列表」即可选用；
+选中结果会被记住，预览与导出共用同一个模版。
+
+## 模版包结构
+
+```
+<templates>/
+└── my-theme/              # 目录名即模版 id（选中后持久化的就是这个 id）
+    ├── template.html      # 必需：入口页面，必须含 {{BODY}} 占位符
+    ├── template.json      # 可选：元数据（缺省时展示名取目录名）
+    └── preview.png        # 可选：缩略图，显示在设置面板的模版卡片上
+```
+
+`template.json` 全部字段可省略，未知字段会被忽略：
+
+```json
+{
+  "name": "论文体",
+  "description": "学术排版，窄栏长文",
+  "version": "1.0.0",
+  "author": "your name",
+  "preview": "preview.png"
+}
+```
+
+缩略图按约定名顺序探测：`preview.png` / `preview.jpg` / `preview.jpeg` /
+`preview.webp` / `preview.svg`；也可用 `template.json` 的 `preview` 字段指定任意相对路径。
+缺失缩略图时列表显示占位图，不影响使用。
+
+## 旧式单文件模版
+
+直接放在本目录根下的 `<id>.html` 仍可用（无元数据、无缩略图），但不推荐新模版采用。
 
 ## 占位符契约
 
-- `{{BODY}}`（必需）：正文落点；缺失该占位符的模板不会被识别
+- `{{BODY}}`（必需）：正文落点；缺失该占位符的模版不会被识别
 - `{{TITLE}}`：文档标题
-- `{{TOC}}`：侧栏目录（嵌套 ul）
+- `{{TOC}}`：侧栏目录（嵌套 li，需自行包 ul）
 - `{{PRINT_TOC}}`：打印目录页（仅 @media print 可见）
 - `{{DOC_TREE}}`：聚合导出的文档树
 - `{{SKILL_METADATA}}`：SKILL.md 元数据卡片
@@ -54,17 +94,44 @@ const TEMPLATES_README: &str = r#"# md2x 外置 HTML 模板
 
 ## 注意
 
-- 模板需自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联
-- 聚合导出的文档树、主题切换等交互需模板自行支持
+- 模版需自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联
+- 聚合导出的文档树、主题切换、全宽等交互需模版自行支持
+- `sample/` 是随应用附带的示例包；本目录内没有任何模版时会被自动重新生成
 "#;
 
-/// 确保模板目录存在且带有说明文件，返回目录路径。
+/// 随二进制打包的示例模版包，首次使用时铺到模版目录，作为约定的活文档
+const SAMPLE_TEMPLATE_HTML: &str = include_str!("../../../templates/sample/template.html");
+const SAMPLE_TEMPLATE_MANIFEST: &str = include_str!("../../../templates/sample/template.json");
+const SAMPLE_TEMPLATE_PREVIEW: &str = include_str!("../../../templates/sample/preview.svg");
+
+/// 目录里一个模版都没有时，铺一份示例包。
+///
+/// 只在「零模版」时写入：既保证新用户能立刻看到约定长什么样，
+/// 又不会在用户已自建模版时多塞无关目录。
+fn seed_sample_template(dir: &Path) {
+    if !template::scan_templates(dir).is_empty() {
+        return;
+    }
+    let d = dir.join("sample");
+    if std::fs::create_dir_all(&d).is_err() {
+        return;
+    }
+    let _ = std::fs::write(d.join(template::TEMPLATE_HTML), SAMPLE_TEMPLATE_HTML);
+    let _ = std::fs::write(
+        d.join(template::TEMPLATE_MANIFEST),
+        SAMPLE_TEMPLATE_MANIFEST,
+    );
+    let _ = std::fs::write(d.join("preview.svg"), SAMPLE_TEMPLATE_PREVIEW);
+}
+
+/// 确保模板目录存在、带说明文件与示例模版，返回目录路径。
 fn ensure_templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let d = templates_dir(app)?;
     let readme = d.join("README.md");
     if !readme.exists() {
         let _ = std::fs::write(&readme, TEMPLATES_README);
     }
+    seed_sample_template(&d);
     Ok(d)
 }
 
@@ -83,14 +150,28 @@ fn load_selected_template(
     }
 }
 
-/// 模板列表项（返回给设置面板）
+/// 模版列表项（返回给设置面板的模版卡片）
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TemplateInfo {
-    /// 模板 id："default" 或外部文件名去扩展名
+    /// 模版 id：内置为 "default"，外置为模版包目录名（旧式为文件名去扩展名）
     id: String,
+    /// 展示名（内置项为兜底文案，前端按 id 本地化）
+    name: String,
+    /// 一句话描述
+    description: String,
+    /// 版本号（可能为空）
+    version: String,
+    /// 作者（可能为空）
+    author: String,
     /// 是否内置模板
     builtin: bool,
+    /// 是否为目录式模版包（false 表示旧式单文件模版）
+    packaged: bool,
+    /// 缩略图 data URL；空串表示无缩略图，由前端渲染占位图
+    preview: String,
+    /// 模版入口 HTML 路径（内置为空）
+    path: String,
 }
 
 /// 文件树节点（目录/文件），递归描述文件夹内的 Markdown 文件
@@ -1221,18 +1302,41 @@ fn render_full_html(
     Ok(template::render_html_with(tpl, &hb, t, metadata.as_ref(), full_width, theme))
 }
 
-/// 列出可用模板：内置 + 外置目录扫描（只收含 {{BODY}} 的 *.html）
+/// 列出可用模版：内置一项 + 模版目录自动扫描结果。
+///
+/// 扫描同时识别目录式模版包（`<id>/template.html` + `template.json` + 缩略图）
+/// 与旧式单文件模版（`<id>.html`），缩略图在此阶段编码为 data URL，
+/// 前端拿到即可直接渲染，无需额外的文件读取权限。
 #[tauri::command]
 fn list_templates(app: tauri::AppHandle) -> Result<Vec<TemplateInfo>, String> {
     let mut out = vec![TemplateInfo {
         id: template::BUILTIN_TEMPLATE_ID.to_string(),
+        // 展示名/描述由前端按 id 走 i18n，这里是后端兜底文案
+        name: "默认模板".to_string(),
+        description: "内置模版：侧栏目录、明暗双主题、图表渲染".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        author: "md2x".to_string(),
         builtin: true,
+        packaged: true,
+        preview: String::new(),
+        path: String::new(),
     }];
     let dir = ensure_templates_dir(&app)?;
-    for t in template::scan_external_templates(&dir) {
+    for e in template::scan_templates(&dir) {
         out.push(TemplateInfo {
-            id: t.id,
+            preview: e
+                .preview
+                .as_deref()
+                .and_then(template::preview_data_url)
+                .unwrap_or_default(),
+            path: e.html_path.to_string_lossy().to_string(),
+            id: e.id,
+            name: e.name,
+            description: e.description,
+            version: e.version,
+            author: e.author,
             builtin: false,
+            packaged: e.packaged,
         });
     }
     Ok(out)
@@ -2075,5 +2179,42 @@ mod tests {
     fn 非file协议不当作路径() {
         assert!(file_url_to_path("https://example.com/a.md").is_none());
         assert!(file_url_to_path("/plain/path.md").is_none());
+    }
+
+    // ===== 模版目录播种 =====
+
+    fn fresh_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("md2x-gui-tpl-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn 空模版目录会铺示例包() {
+        let dir = fresh_dir("seed-empty");
+        seed_sample_template(&dir);
+        let found = template::scan_templates(&dir);
+        assert_eq!(found.len(), 1, "应且仅应生成一个示例包");
+        assert_eq!(found[0].id, "sample");
+        assert_eq!(found[0].name, "简约排版", "示例包应带可读的展示名");
+        assert!(found[0].preview.is_some(), "示例包应带缩略图");
+        assert!(
+            template::preview_data_url(found[0].preview.as_ref().unwrap()).is_some(),
+            "缩略图应能编码为 data URL"
+        );
+    }
+
+    #[test]
+    fn 已有模版时不再塞示例包() {
+        // 用户自建模版后，示例包不应再冒出来干扰列表
+        let dir = fresh_dir("seed-existing");
+        std::fs::write(dir.join("mine.html"), "<html><body>{{BODY}}</body></html>").unwrap();
+        seed_sample_template(&dir);
+        let ids: Vec<String> = template::scan_templates(&dir)
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(ids, vec!["mine"]);
     }
 }

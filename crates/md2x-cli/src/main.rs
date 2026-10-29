@@ -33,9 +33,11 @@ struct Cli {
     #[arg(long, default_value = "auto")]
     theme: String,
 
-    /// Path to an external HTML template file (must contain the {{BODY}} placeholder).
-    /// When omitted, the built-in default template is used.
-    #[arg(long, value_name = "FILE")]
+    /// Path to an external template: either a template package directory
+    /// (containing template.html) or a single HTML file. The entry page must
+    /// contain the {{BODY}} placeholder. When omitted, the built-in default
+    /// template is used.
+    #[arg(long, value_name = "FILE|DIR")]
     template: Option<String>,
 }
 
@@ -52,9 +54,10 @@ fn run() -> Result<(), error::MpeError> {
     let path = Path::new(&cli.file);
     let theme = template::Theme::parse(&cli.theme);
     // 外置模板：显式指定时加载失败直接报错退出（与 GUI 的静默回退不同，
-    // CLI 用户明确表达了意图，静默回退会产出非预期结果）
+    // CLI 用户明确表达了意图，静默回退会产出非预期结果）。
+    // 路径既可是模版包目录（含 template.html），也可是单个 HTML 文件。
     let tpl = match &cli.template {
-        Some(p) => Some(template::HtmlTemplate::from_file(Path::new(p))?),
+        Some(p) => Some(template::HtmlTemplate::from_path(Path::new(p))?),
         None => None,
     };
 

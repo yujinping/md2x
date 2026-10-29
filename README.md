@@ -12,7 +12,7 @@ md2x-project/
 │   ├── md2x-cli/            # CLI 二进制入口
 │   └── md2x-gui/            # Tauri 2 桌面应用后端
 ├── frontend/                  # Vue 3 + Pinia + Tailwind 前端
-├── templates/                 # HTML 模板和前端资源（CSS/JS）
+├── templates/                 # 内置 HTML 模板、示例模板包与前端资源（CSS/JS）
 └── docs/                      # 文档
 ```
 
@@ -34,7 +34,7 @@ cargo run -p md2x-cli -- README.md --format html  # 生成 README.html
 cargo run -p md2x-cli -- README.md --format png   # 生成 README.png（1920x1080 截图）
 cargo run -p md2x-cli -- README.md --format docx  # 生成 README.docx（可编辑 Word 文档，不依赖 Office）
 cargo run -p md2x-cli -- README.md --preview      # 生成 PDF 并用默认应用打开
-cargo run -p md2x-cli -- README.md --format html --template my-tpl.html  # 指定外置 HTML 模板
+cargo run -p md2x-cli -- README.md --format html --template my-theme/  # 指定模板包目录
 ```
 
 ### 全局安装（推荐）
@@ -62,19 +62,46 @@ cd .. && cargo run -p md2x-gui
 - **单文件预览**：打开 / 拖入 `.md` 文件，HTML 即时预览，可导出 PDF、HTML、DOCX
 - **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
 - **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
-- **HTML 模板**：预览与导出使用同一套模板；内置默认模板之外，把含 `{{BODY}}` 占位符的 `.html` 文件放入模板目录（设置 → 打开模板目录）即可在设置中选用，CLI 用 `--template <文件>` 指定
+- **HTML 模板**：预览与导出使用同一套模板。模板以「目录包」形式组织，放入模板目录（设置 → 导出 → 打开模板目录）后自动扫描加载，卡片式选择并记住所选模版；CLI 用 `--template <目录|文件>` 指定
 - **外部图表引擎**：```d2 / ```dot / ```graphviz 代码块由外部 CLI（[D2](https://d2lang.com) / [Graphviz](https://graphviz.org)）在转换期烘焙为内嵌 SVG，设置面板可查看安装状态，装上即用；未安装时保留代码块不报错
 - **默认打开程序**：设置中一键把 `.md` 关联到 md2x（Windows 写注册表、macOS 写 LaunchServices、Linux 使用 xdg-mime），双击 Markdown 文件即可用 md2x 打开
 
 ### 自定义 HTML 模板
 
-外置模板是一份完整 HTML 文档，占位符契约：
+模板以**目录包**（与 AI Skill 类似：目录 + 固定入口文件 + 元数据 + 缩略图）为单位，
+放在约定目录内即被自动扫描，无需注册：
+
+```
+<templates>/                    # 默认 <app_data_dir>/templates，可用 MD2X_TEMPLATE_DIR 覆盖
+└── my-theme/                   # 目录名即模板 id
+    ├── template.html           # 必需：入口页面，必须含 {{BODY}}
+    ├── template.json           # 可选：元数据
+    └── preview.png             # 可选：缩略图（显示在设置面板的模板卡片上）
+```
+
+`template.json` 的字段全部可省略，未知字段忽略：
+
+```json
+{
+  "name": "论文体",
+  "description": "学术排版，窄栏长文",
+  "version": "1.0.0",
+  "author": "your name",
+  "preview": "preview.png"
+}
+```
+
+缩略图按约定名顺序探测 `preview.png` / `preview.jpg` / `preview.jpeg` / `preview.webp` / `preview.svg`，
+也可用 `preview` 字段指定任意相对路径；缺失时列表显示占位图，不影响使用。
+旧版把 `<id>.html` 直接放在模板根目录的方式仍然可用（无元数据、无缩略图）。
+
+占位符契约：
 
 | 占位符 | 必需 | 说明 |
 |---|---|---|
 | `{{BODY}}` | ✅ | 正文落点，缺失则模板不被识别 |
 | `{{TITLE}}` | | 文档标题 |
-| `{{TOC}}` | | 侧栏目录（嵌套 ul） |
+| `{{TOC}}` | | 侧栏目录（嵌套 `li`，需自行包 `ul`） |
 | `{{PRINT_TOC}}` | | 打印目录页（仅 @media print 可见） |
 | `{{DOC_TREE}}` | | 聚合导出的文档树 |
 | `{{SKILL_METADATA}}` | | SKILL.md 元数据卡片 |
@@ -82,7 +109,9 @@ cd .. && cargo run -p md2x-gui
 | `{{WIDTH_VARS}}` | | 全宽模式 CSS |
 | `{{GITHUB_MD_CSS}}` 等 | | 内置样式与脚本，按需取用 |
 
-模板自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联。首次打开模板目录会生成一份说明 README。
+模板自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联。
+模板目录内没有任何模板时，应用会自动生成 `sample/` 示例包（`templates/sample/` 亦随仓库提供），
+可直接参照它改写。首次打开模板目录还会生成一份说明 README。
 
 ## 工作流
 

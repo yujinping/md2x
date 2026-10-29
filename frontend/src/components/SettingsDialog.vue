@@ -122,17 +122,23 @@ const activeViewMode = computed(
   () => viewModes.find(m => m.value === settings.viewMode) || viewModes[2],
 )
 
-// ===== HTML 模板选择 =====
-// 预览与导出共用所选模板；列表来自后端（内置 + 外置目录扫描）
+// ===== 导出模版选择 =====
+// 预览与导出共用所选模版；列表由后端自动扫描模版目录（内置 + 目录包 + 旧式单文件）。
+// 模版包约定：<id>/template.html（入口）+ template.json（元数据）+ preview.*（缩略图）。
 const templates = ref([])
 const templatesError = ref(false)
+// 初值为 true：mount 时立刻发起扫描，先置「加载中」可避免闪现一次空目录提示
+const templatesLoading = ref(true)
 
 async function loadTemplates() {
+  templatesLoading.value = true
   templatesError.value = false
   try {
     templates.value = await invoke('list_templates')
   } catch (_) {
     templatesError.value = true
+  } finally {
+    templatesLoading.value = false
   }
 }
 
@@ -140,8 +146,29 @@ async function openTemplateDir() {
   try { await invoke('open_templates_dir') } catch (_) {}
 }
 
-/// 当前选中的 id 在列表里不存在时（如外置模板被删），仍保留用户选择，
-/// 后端会回退到内置模板渲染，这里只提示不强制改选
+// 内置模版的名称与描述随界面语言变化（后端只给兜底文案）
+function tplName(tpl) {
+  return tpl.builtin ? t('templateBuiltinName', settings.lang) : (tpl.name || tpl.id)
+}
+function tplDesc(tpl) {
+  if (tpl.builtin) return t('templateBuiltinDesc', settings.lang)
+  return tpl.description || t('templateNoDesc', settings.lang)
+}
+function tplBadge(tpl) {
+  if (tpl.builtin) return t('templateBadgeBuiltin', settings.lang)
+  return tpl.packaged ? t('templateBadgeCustom', settings.lang) : t('templateBadgeLegacy', settings.lang)
+}
+// 卡片底部元信息：版本 / 作者 / 目录名，缺哪个跳过哪个
+function tplMeta(tpl) {
+  const parts = []
+  if (tpl.version) parts.push('v' + tpl.version.replace(/^v/i, ''))
+  if (tpl.author) parts.push(tpl.author)
+  if (!tpl.builtin && !tpl.packaged) parts.push(tpl.id + '.html')
+  return parts.join(' · ')
+}
+
+/// 当前选中的 id 在列表里不存在时（如外置模版被删），仍保留用户选择，
+/// 后端会回退到内置模版渲染，这里只提示不强制改选
 const templateMissing = computed(() =>
   templates.value.length > 0 &&
   !templates.value.some(t => t.id === settings.templateId)
@@ -349,44 +376,111 @@ async function setDefault() {
             </div>
           </template>
 
-          <!-- ===== 导出：HTML 模板 ===== -->
+          <!-- ===== 导出：模版选择（卡片 + 缩略图） ===== -->
           <template v-else-if="activeTab === 'export'">
             <div>
-              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
-              <div class="flex items-center gap-2">
-                <select
-                  class="flex-1 h-10 px-3 rounded-xl text-[13px] cursor-pointer outline-none"
-                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1.5px solid var(--border)' }"
-                  :value="settings.templateId"
-                  @change="settings.setTemplateId($event.target.value)"
-                >
-                  <option v-for="tpl in templates" :key="tpl.id" :value="tpl.id">
-                    {{ tpl.builtin ? t('templateBuiltin', settings.lang) : tpl.id }}
-                  </option>
-                </select>
-                <button
-                  class="h-10 w-10 rounded-xl border flex items-center justify-center cursor-pointer flex-shrink-0"
-                  :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
-                  :title="t('btnRefreshList', settings.lang)"
-                  @click="loadTemplates"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-                    <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
-                  </svg>
-                </button>
-                <button
-                  class="h-10 px-4 rounded-xl border text-[13px] font-medium cursor-pointer flex-shrink-0 flex items-center gap-1.5"
-                  :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
-                  :title="t('btnOpenTemplateDir', settings.lang)"
-                  @click="openTemplateDir"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-                    <path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" />
-                  </svg>
-                  {{ t('btnOpenTemplateDir', settings.lang) }}
-                </button>
+              <div class="flex items-center justify-between gap-2 mb-3">
+                <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
+                <div class="flex items-center gap-1.5">
+                  <button
+                    class="w-7 h-7 rounded-lg border flex items-center justify-center cursor-pointer"
+                    :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent', opacity: templatesLoading ? 0.5 : 1 }"
+                    :title="t('btnRefreshList', settings.lang)"
+                    :disabled="templatesLoading"
+                    @click="loadTemplates"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                      <path d="M14 8a6 6 0 1 1-1.76-4.24" /><path d="M14 1.5V4h-2.5" />
+                    </svg>
+                  </button>
+                  <button
+                    class="h-7 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer flex items-center gap-1.5"
+                    :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+                    :title="t('btnOpenTemplateDir', settings.lang)"
+                    @click="openTemplateDir"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                      <path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" />
+                    </svg>
+                    {{ t('btnOpenTemplateDir', settings.lang) }}
+                  </button>
+                </div>
               </div>
-              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
+
+              <!-- 模版卡片：点击即选中并持久化（记忆到下次启动） -->
+              <div class="grid grid-cols-2 gap-3">
+                <button
+                  v-for="tpl in templates"
+                  :key="tpl.id"
+                  class="flex flex-col text-left rounded-xl overflow-hidden cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.templateId === tpl.id ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.templateId === tpl.id ? 'rgba(99,102,241,0.06)' : 'transparent',
+                  }"
+                  :title="tpl.id"
+                  @click="settings.setTemplateId(tpl.id)"
+                >
+                  <!-- 缩略图区：无缩略图时渲染占位图形 -->
+                  <span
+                    class="relative w-full h-[92px] flex items-center justify-center overflow-hidden"
+                    :style="{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }"
+                  >
+                    <img
+                      v-if="tpl.preview"
+                      :src="tpl.preview"
+                      :alt="tplName(tpl)"
+                      class="w-full h-full object-cover object-top"
+                    />
+                    <svg
+                      v-else
+                      viewBox="0 0 64 40"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      class="w-[56px] h-[36px]"
+                      :style="{ color: 'var(--text-dim)' }"
+                    >
+                      <rect x="2" y="2" width="60" height="36" rx="4" />
+                      <path d="M10 11h22M10 18h34M10 25h28M10 32h18" />
+                    </svg>
+                    <!-- 来源标记 -->
+                    <span
+                      class="absolute top-1.5 left-1.5 text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                      :style="tpl.builtin
+                        ? { background: 'rgba(99,102,241,0.14)', color: 'var(--accent)' }
+                        : { background: 'rgba(150,150,150,0.18)', color: 'var(--text-muted)' }"
+                    >{{ tplBadge(tpl) }}</span>
+                    <!-- 选中标记 -->
+                    <span
+                      v-if="settings.templateId === tpl.id"
+                      class="absolute top-1.5 right-1.5 w-[18px] h-[18px] rounded-full flex items-center justify-center"
+                      :style="{ background: 'var(--accent)', color: '#fff' }"
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="w-3 h-3">
+                        <path d="M3.5 8.5l3 3 6-6.5" />
+                      </svg>
+                    </span>
+                  </span>
+                  <span class="flex flex-col gap-0.5 px-3 py-2.5 w-full min-w-0">
+                    <span
+                      class="text-[13px] font-semibold truncate"
+                      :style="{ color: settings.templateId === tpl.id ? 'var(--accent)' : 'var(--text)' }"
+                    >{{ tplName(tpl) }}</span>
+                    <span class="text-[11px] leading-snug line-clamp-2" :style="{ color: 'var(--text-dim)' }">{{ tplDesc(tpl) }}</span>
+                    <span v-if="tplMeta(tpl)" class="text-[10px] font-mono truncate" :style="{ color: 'var(--text-dim)' }">{{ tplMeta(tpl) }}</span>
+                  </span>
+                </button>
+
+                <!-- 空目录：给出明确下一步，而不是一片空白 -->
+                <div
+                  v-if="!templatesLoading && !templates.length && !templatesError"
+                  class="col-span-2 px-3.5 py-6 rounded-xl text-center text-[12px]"
+                  :style="{ border: '1.5px dashed var(--border)', color: 'var(--text-dim)' }"
+                >{{ t('templateEmpty', settings.lang) }}</div>
+              </div>
+
+              <p class="mt-3 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
               <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
               <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
             </div>
