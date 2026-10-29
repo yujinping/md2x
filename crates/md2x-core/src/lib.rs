@@ -4,6 +4,7 @@ pub mod template;
 pub mod error;
 pub mod chrome;
 pub mod mermaid;
+pub mod ext_diagram;
 pub mod aggregate;
 pub mod cdp;
 pub mod print_toc;

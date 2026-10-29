@@ -110,6 +110,15 @@ fn render_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut RenderCtx
                         render_code_block(lang_opt, &cb.literal, out);
                     }
                 }
+            } else if let Some(tool) = crate::ext_diagram::tool_for_lang(lang) {
+                // d2 / dot / graphviz：外部 CLI 渲染为 SVG；未装 CLI 时降级保留代码块
+                match crate::ext_diagram::render_svg(tool, &cb.literal) {
+                    Some(svg) => out.push_str(&render_mermaid_drawing(svg.as_bytes(), ctx)),
+                    None => {
+                        let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                        render_code_block(lang_opt, &cb.literal, out);
+                    }
+                }
             } else {
                 let lang_opt = if lang.is_empty() { None } else { Some(lang) };
                 render_code_block(lang_opt, &cb.literal, out);
@@ -370,6 +379,15 @@ fn render_quote_block<'a>(node: &'a AstNode<'a>, out: &mut String, ctx: &mut Ren
             // mermaid / flowchart 等图表：直接渲染为 SVG 矢量图内嵌；失败则保留代码块
             if mermaid::is_mermaid_source(lang, &cb.literal) {
                 match mermaid::render_mermaid_svg_from(lang, &cb.literal) {
+                    Some(svg) => out.push_str(&render_mermaid_drawing(svg.as_bytes(), ctx)),
+                    None => {
+                        let lang_opt = if lang.is_empty() { None } else { Some(lang) };
+                        render_code_block(lang_opt, &cb.literal, out);
+                    }
+                }
+            } else if let Some(tool) = crate::ext_diagram::tool_for_lang(lang) {
+                // d2 / dot / graphviz：外部 CLI 渲染为 SVG；未装 CLI 时降级保留代码块
+                match crate::ext_diagram::render_svg(tool, &cb.literal) {
                     Some(svg) => out.push_str(&render_mermaid_drawing(svg.as_bytes(), ctx)),
                     None => {
                         let lang_opt = if lang.is_empty() { None } else { Some(lang) };
