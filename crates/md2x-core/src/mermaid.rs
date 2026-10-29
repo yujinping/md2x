@@ -35,6 +35,11 @@ const MERMAID_PREFIX: &[&str] = &[
 /// 内置的 mermaid UMD 构建（离线可用，编译进二进制）。
 const MERMAID_JS: &str = include_str!("../../../templates/assets/mermaid.min.js");
 
+/// 内置的 ELK 布局器 bundle：@mermaid-js/layout-elk@0.2.3（peer mermaid ^11），
+/// esbuild 打成 IIFE、mermaid 置为全局外部依赖；加载时自动 registerLayoutLoaders
+/// 并置 window.__md2xElkReady。编译进二进制，离线可用。
+const MERMAID_ELK_JS: &str = include_str!("../../../templates/assets/mermaid-layout-elk.min.js");
+
 /// Chrome dump-dom 一次渲染的虚拟时间预算（毫秒）。
 const VIRTUAL_TIME_BUDGET: u64 = 20000;
 
@@ -161,10 +166,14 @@ fn render_via_chrome(chrome: &str, sources: &[String]) -> Option<Vec<DiagramResu
     let tmp = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&tmp).ok()?;
 
-    // 写出内置 mermaid 库（仅首次）
+    // 写出内置 mermaid 库与 ELK 布局器（仅首次）
     let mermaid_path = tmp.join("mermaid.min.js");
     if !mermaid_path.exists() {
         std::fs::write(&mermaid_path, MERMAID_JS).ok()?;
+    }
+    let elk_path = tmp.join("mermaid-layout-elk.min.js");
+    if !elk_path.exists() {
+        std::fs::write(&elk_path, MERMAID_ELK_JS).ok()?;
     }
 
     let diagrams_json = serde_json::to_string(sources).ok()?;
@@ -230,6 +239,7 @@ fn build_harness(diagrams_json: &str) -> String {
 <head>
 <meta charset="utf-8">
 <script src="mermaid.min.js"></script>
+<script src="mermaid-layout-elk.min.js"></script>
 </head>
 <body>
 <script>
@@ -252,18 +262,39 @@ if (typeof mermaid === 'undefined') {{
   reportError('mermaid global is undefined', '');
 }} else {{
   try {{
-    mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: 'default' }});
+    // ELK 已注册时默认用 elk 布局（分层布局边交叉更少）；
+    // bundle 加载失败则 __md2xElkReady 不存在，自动回落 dagre
+    var cfg = {{ startOnLoad: false, securityLevel: 'loose', theme: 'default' }};
+    if (window.__md2xElkReady) cfg.layout = 'elk';
+    mermaid.initialize(cfg);
+    // 记录布局引擎档位，dump-dom 后可用于排查（不进入任何导出产物）
+    document.body.setAttribute('data-layout', window.__md2xElkReady ? 'elk' : 'dagre');
   }} catch (e) {{
     reportError('mermaid.initialize failed: ' + e.message, e.stack);
   }}
 }}
+
+  // elk 渲染失败的图回落 dagre 重试一次：个别图型 elk 布局异常时不应丢图
+  async function renderOne(i, code) {{
+    try {{
+      return await mermaid.render('mmd-' + i, code);
+    }} catch (e) {{
+      if (!window.__md2xElkReady) throw e;
+      mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: 'default', layout: 'dagre' }});
+      try {{
+        return await mermaid.render('mmd-' + i, code);
+      }} finally {{
+        mermaid.initialize({{ startOnLoad: false, securityLevel: 'loose', theme: 'default', layout: 'elk' }});
+      }}
+    }}
+  }}
 
 (async () => {{
   const results = [];
   for (let i = 0; i < diagrams.length; i++) {{
     const code = diagrams[i];
     try {{
-      const {{ svg }} = await mermaid.render('mmd-' + i, code);
+      const {{ svg }} = await renderOne(i, code);
       results.push({{ i: i, svg: svg }});
     }} catch (e) {{
       results.push({{ i: i, svg: null }});

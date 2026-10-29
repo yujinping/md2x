@@ -92,6 +92,10 @@ Markdown → comrak → HTML → 模板渲染
   ├─ PNG：Chrome headless 截图（--screenshot）
   └─ DOCX：comrak AST → OOXML（zip+XML），纯 Rust 生成，无需 Office/WPS
 
+> mermaid 图表在转换期经 headless Chrome 一次性烘焙为内嵌 SVG，布局引擎默认
+> ELK（分层布局，边交叉更少）；ELK 不可用时自动回落 dagre，单个图渲染失败
+> 保留原始代码块，不中断导出。
+
 > DOCX 输出的标题使用 Word 标题样式，打开后左侧导航窗格即可看到目录；正文排版
 > （字体、字号、行距、表格、代码高亮、图片等）与 HTML 预览保持一致。
 ```
