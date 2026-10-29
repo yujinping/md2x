@@ -91,8 +91,10 @@ PY
     done < <(find . -name tauri.conf.json -not -path './.git/*' -not -path './target/*' -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##' || true)
     # 前端 package.json 同样带版本号：不一起 bump 会与后端长期错位，
     # 排查问题时容易误判手上跑的是哪个版本
+    # 注意用 if 而不是 `[ -f x ] && ...`——后者在文件不存在时返回 1，
+    # 作为函数最后一条语句会让整个脚本在 set -e 下静默退出（无任何输出）
     for f in frontend/package.json package.json; do
-        [ -f "$f" ] && VERSION_FILES+=("$f")
+        if [ -f "$f" ]; then VERSION_FILES+=("$f"); fi
     done
 }
 detect_version_files
