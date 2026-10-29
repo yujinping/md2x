@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useSettingsStore } from './stores/settings.js'
 import { t } from './i18n/index.js'
 import Toolbar from './components/Toolbar.vue'
@@ -11,6 +12,7 @@ import SettingsDialog from './components/SettingsDialog.vue'
 import PdfOverlay from './components/PdfOverlay.vue'
 import FileTree from './components/FileTree.vue'
 import FindBar from './components/FindBar.vue'
+import PreviewContextMenu from './components/PreviewContextMenu.vue'
 import { injectFindRuntime } from './find-runtime.js'
 
 const settings = useSettingsStore()
@@ -21,15 +23,18 @@ const statusText = ref('')
 const statusType = ref('')
 const isPdfView = ref(false)
 const isGeneratingPdf = ref(false)
+// 窗口是否处于全屏：全屏时收起底部状态栏（沉浸阅读）
+const isFullscreen = ref(false)
 // 当前打开文件的完整路径，用于把相对链接解析为绝对路径
 const currentPath = ref('')
 
 // ===== 文件夹 / 文件树视图 =====
 const isFolderView = ref(false)
-// 文件树是否可见（目录式折叠：关闭只是隐藏，可随时再显示）
-const fileTreeVisible = ref(true)
+// 文件树是否可见（目录式折叠：关闭只是隐藏，可随时再显示）。
+// 初值来自持久化偏好，这样「上次关掉的树」重启后不会又冒出来
+const fileTreeVisible = ref(settings.treeVisible)
 // 进入全宽阅读前文件树的可见状态，退出时恢复
-const savedTreeVisible = ref(true)
+const savedTreeVisible = ref(settings.treeVisible)
 const folderPath = ref('')
 const folderTree = ref(null) // TreeNode[] | null
 const folderName = computed(() => {
@@ -53,6 +58,19 @@ function sendFind(action, query) {
   if (!win) return
   try {
     win.postMessage({ type: 'md2x-find', action, query: query || '' }, '*')
+  } catch (_) {}
+}
+
+/// 把窗口全屏状态回写给预览 iframe。
+/// 预览页的全屏按钮在 WebView 里拿不到 Element.requestFullscreen（WKWebView 未实现 + iframe 权限策略），
+/// 只能由宿主切换窗口全屏再把结果回报，按钮图标才不会与实际状态脱节。
+/// 同时记入本地状态：全屏下要收起底部状态栏，把整屏让给正文。
+function postFullscreenState(active) {
+  isFullscreen.value = !!active
+  const win = previewFrame.value && previewFrame.value.contentWindow
+  if (!win) return
+  try {
+    win.postMessage({ type: 'md2x-fullscreen-state', active: !!active }, '*')
   } catch (_) {}
 }
 
@@ -166,7 +184,7 @@ async function loadPreview() {
     setStatus(e.toString(), 'error')
     return
   }
-  previewState.value = injectFindRuntime(injectLinkHandler(applyFullWidth(html)))
+  previewState.value = injectFindRuntime(injectContextMenu(injectLinkHandler(applyFullWidth(html))))
 
   try {
     const n = await invoke('get_file_name')
@@ -196,6 +214,39 @@ function injectLinkHandler(html) {
         window.parent.postMessage({ type: 'md2x-link', href: href }, '*');
       }
     }
+  }, true);
+})();
+`
+  const script = open + code + close
+  if (html.indexOf('</body>') !== -1) {
+    return html.replace('</body>', script + '</body>')
+  }
+  return html + script
+}
+
+/// 向内嵌预览 HTML 注入右键菜单脚本：
+/// iframe 里的 DOM 无法把菜单绘制到窗口其他区域，所以这里只负责
+/// 「拦下原生右键 + 上报坐标与选区」，真正的菜单由父窗口渲染。
+function injectContextMenu(html) {
+  const open = '<' + 'script>'
+  const close = '<' + '/script>'
+  const code = `
+(function () {
+  function toParent(msg) {
+    if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
+  }
+  document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    var sel = '';
+    try { sel = String(window.getSelection() || ''); } catch (_) {}
+    toParent({ type: 'md2x-context', x: e.clientX, y: e.clientY, selection: sel });
+  }, true);
+  // 左键点击 / Esc 视为取消：iframe 内的事件不会冒泡到父窗口，只能在这里转交
+  document.addEventListener('mousedown', function (e) {
+    if (e.button === 0) toParent({ type: 'md2x-context-close' });
+  }, true);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') toParent({ type: 'md2x-context-close' });
   }, true);
 })();
 `
@@ -266,6 +317,13 @@ function onIframeMessage(e) {
   } else if (data.type === 'md2x-find-result') {
     findTotal.value = data.total || 0
     findIndex.value = data.index || 0
+  } else if (data.type === 'md2x-context') {
+    openContextMenu(data)
+  } else if (data.type === 'md2x-context-close') {
+    ctxMenu.value = null
+  } else if (data.type === 'md2x-fullscreen-toggle') {
+    // iframe 内请求整窗全屏：交给主窗口执行，再把结果回报给按钮
+    invoke('toggle_fullscreen').then(postFullscreenState).catch(() => {})
   }
 }
 
@@ -461,8 +519,9 @@ async function openFolder(path, opts = {}) {
     folderPath.value = path
     folderTree.value = tree
     isFolderView.value = true
-    // 全宽阅读模式下打开新文件夹也不展开文件树，保持只看正文
-    fileTreeVisible.value = !settings.fullWidth
+    // 全宽阅读模式下打开新文件夹也不展开文件树，保持只看正文；
+    // 否则沿用上次的文件树显隐偏好
+    fileTreeVisible.value = settings.treeVisible && !settings.fullWidth
     // 打开文件夹时：若根目录存在 README.md 且当前未打开任何文件，则自动渲染它；
     // 否则保持现有欢迎介绍页
     if (opts.autoReadme !== false && !hasFile.value) {
@@ -474,15 +533,29 @@ async function openFolder(path, opts = {}) {
   }
 }
 
-/// 隐藏文件树（仅折叠面板，文件夹保持打开，可再显示）
-function hideFileTree() {
-  fileTreeVisible.value = false
+/// 用户主动切换文件树显隐：运行时状态与持久化偏好一起改。
+///
+/// 只有「用户真的点了显示/隐藏」的路径才走这里 —— 全宽模式临时收起、
+/// 打开/关闭文件夹属于流程性动作，只改运行时状态。否则一次全宽阅读
+/// 就会把偏好改写成「隐藏」，下次启动文件树莫名其妙不出现。
+function setTreeVisibleByUser(v) {
+  fileTreeVisible.value = v
+  settings.setTreeVisible(v)
 }
 
-/// 切换文件树显示/隐藏（工具栏按钮）
+/// 隐藏文件树（仅折叠面板，文件夹保持打开，可再显示）
+function hideFileTree() {
+  setTreeVisibleByUser(false)
+}
+
+/// 切换文件树显示/隐藏（工具栏按钮 / 视图菜单）
 function toggleFileTree() {
-  if (!isFolderView.value && !folderTree.value) return
-  fileTreeVisible.value = !fileTreeVisible.value
+  if (!isFolderView.value && !folderTree.value) {
+    // 没有文件夹时无可切换：把菜单勾选复位（点击瞬间系统已翻转勾选）
+    syncMenuState()
+    return
+  }
+  setTreeVisibleByUser(!fileTreeVisible.value)
 }
 
 /// 关闭文件夹：卸载文件夹内打开的预览文件，回到默认欢迎视图（初始状态）
@@ -491,12 +564,49 @@ async function closeFolder() {
   isFolderView.value = false
   folderTree.value = null
   folderPath.value = ''
+  // 只复位运行时状态，不动持久化偏好：关掉文件夹不代表用户想把树永久关掉
   fileTreeVisible.value = true
   // 文件夹视图关闭时，把其中正在预览的文件一并卸载，回到欢迎初始状态
   if (hadFolder && currentPath.value) await resetCurrentFile()
   try {
     await invoke('close_folder')
   } catch (_) {}
+}
+
+/// 菜单「文件 → 关闭」：只关当前文档，保留文件树（目录视图下可继续点下一个文件）；
+/// 没有打开的文档时才回退为关闭文件夹
+async function closeCurrentFile() {
+  if (hasFile.value || currentPath.value) {
+    await resetCurrentFile()
+    return
+  }
+  await closeFolder()
+}
+
+/// 把文件树可见性/可用性与全宽状态同步回原生菜单：
+/// 前端是这两份状态的唯一来源（工具栏按钮、全宽模式、开关文件夹都会改它们），
+/// 不回写则菜单勾选会与实际显示不一致
+function syncMenuState() {
+  const enabled = isFolderView.value || !!folderTree.value
+  invoke('sync_menu_state', {
+    treeVisible: fileTreeVisible.value,
+    treeEnabled: enabled,
+    fullWidth: settings.fullWidth,
+    toolbarVisible: settings.toolbarVisible,
+    hasFile: hasFile.value,
+    hasFolder: isFolderView.value && !!folderTree.value,
+  }).catch(() => {})
+}
+
+/// 菜单「文件 → 导出 ▸ X」：与预览右键菜单同一个分发口，
+/// 保证「菜单 / 右键 / 工具栏」三条入口的行为完全一致
+function onMenuExport(format) {
+  if (!format) return
+  if (format === 'folder') {
+    onExportFolder()
+    return
+  }
+  onExportDoc(format)
 }
 
 /// 弹出文件夹选择对话框（工具栏按钮 / 菜单 / 拖拽共用）
@@ -567,6 +677,46 @@ const showAbout = ref(false)
 const showSettings = ref(false)
 const isDragging = ref(false)
 
+// ===== 预览区右键菜单 =====
+// { x, y, selection } | null：坐标是父窗口视口坐标（iframe 内坐标已换算）
+const ctxMenu = ref(null)
+
+/// 在预览区右键：把 iframe 内坐标换算成视口坐标后弹出菜单
+function openContextMenu(data) {
+  const el = previewFrame.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  ctxMenu.value = {
+    x: rect.left + (data.x || 0),
+    y: rect.top + (data.y || 0),
+    selection: data.selection || '',
+  }
+}
+
+/// 复制选中文字：走系统剪贴板命令（与文件树右键「复制相对路径」同一实现，
+/// 不依赖 navigator.clipboard —— 该 API 在 Tauri 自定义协议下常被拒）
+async function onCtxCopy() {
+  const text = ctxMenu.value && ctxMenu.value.selection
+  ctxMenu.value = null
+  if (!text) return
+  try {
+    await invoke('copy_text', { text })
+    setStatus('statusCopied', 'ready')
+  } catch (e) {
+    setStatus(e.toString(), 'error')
+  }
+}
+
+/// 右键菜单「导出」：与工具栏导出按钮完全同一条链路
+function onCtxExport(format) {
+  ctxMenu.value = null
+  if (format === 'folder') {
+    onExportFolder()
+    return
+  }
+  onExportDoc(format)
+}
+
 async function onOpenFile() {
   try {
     const p = await invoke('plugin:dialog|open', {
@@ -616,13 +766,38 @@ onMounted(async () => {
     try {
       if (await invoke('check_show_about')) showAbout.value = true
       if (await invoke('check_show_settings')) showSettings.value = true
+      if (await invoke('check_show_open_file')) onOpenFile()
+      if (await invoke('check_show_close_file')) closeCurrentFile()
+      if (await invoke('check_toggle_tree')) toggleFileTree()
+      if (await invoke('check_toggle_toolbar')) settings.setToolbarVisible(!settings.toolbarVisible)
+      if (await invoke('check_toggle_fullwidth')) toggleFullWidth()
       if (await invoke('check_show_open_folder')) onOpenFolder()
       if (await invoke('check_show_close_folder')) closeFolder()
+      const fmt = await invoke('check_menu_export')
+      if (fmt) onMenuExport(fmt)
     } catch (_) {}
   }, 500)
 
+  // 文件树状态回写菜单勾选/可用性（含首次挂载）
+  watch([fileTreeVisible, isFolderView, folderTree], syncMenuState, { immediate: true })
+  // 全宽状态变化（工具栏按钮 / 菜单勾选）也要回写，保持菜单与工具栏一致
+  watch(() => settings.fullWidth, syncMenuState)
+  // 工具栏显隐同理：菜单勾选必须反映真实显示状态（持久化后重启也要对齐）
+  watch(() => settings.toolbarVisible, syncMenuState, { immediate: true })
+  // 有没有可导出的内容决定「导出 ▸」整组是否可用
+  watch([hasFile, isFolderView], syncMenuState)
+
   // 监听内嵌预览页转发来的内部链接点击
   window.addEventListener('message', onIframeMessage)
+  // 窗口全屏状态变化（⌃⌘F、绿灯、Esc 退出）回写预览页的浮动按钮
+  try {
+    await listen('md2x://fullscreen', (e) => postFullscreenState(e.payload))
+  } catch (_) {}
+  // 先读一次初始全屏状态：带全屏配置启动时不会有 Resized 事件，
+  // 光等广播会漏掉初始态，状态栏就会在多出来的 32px 里露出来
+  try {
+    postFullscreenState(await invoke('is_fullscreen'))
+  } catch (_) {}
 
   // Initial file check（并以此为历史起点），随后按默认视图初始化
   let initialFile = null
@@ -641,14 +816,25 @@ onMounted(async () => {
   }).catch(() => {})
   setStatus('statusReady', 'ready')
 
-  // 键盘快捷键：Cmd+O 打开文件（打开文件夹由菜单 Cmd/Ctrl+Shift+O 触发）；Alt+← / Alt+→ 前进后退；Cmd+F 页内查找
+  // 键盘快捷键：Alt+← / Alt+→ 前进后退；Cmd/Ctrl+F 页内查找。
+  // Cmd/Ctrl+O 打开文件、Cmd/Ctrl+B 显示目录树、全屏等由原生菜单加速键负责，
+  // 这里不再重复绑定，否则同一次按键会触发两次（弹出两个对话框）。
   window.addEventListener('keydown', (e) => {
+    if (ctxMenu.value && e.key === 'Escape') {
+      // 右键菜单开着时 Esc 只关菜单，不关查找栏
+      e.preventDefault()
+      ctxMenu.value = null
+      return
+    }
+    if (ctxMenu.value && (e.metaKey || e.ctrlKey) && e.key === 'c') {
+      // 菜单开着时焦点已不在 iframe 内，需由父窗口代劳复制
+      e.preventDefault()
+      onCtxCopy()
+      return
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === 'f' && !e.shiftKey) {
       e.preventDefault()
       openFind()
-    } else if ((e.metaKey || e.ctrlKey) && e.key === 'o' && !e.shiftKey) {
-      e.preventDefault()
-      onOpenFile()
     } else if (e.altKey && e.key === 'ArrowLeft') {
       e.preventDefault()
       goBack()
@@ -663,6 +849,7 @@ onMounted(async () => {
 <template>
   <div class="h-screen flex flex-col">
     <Toolbar
+      v-if="settings.toolbarVisible"
       :hasFile="hasFile"
       :isPdfView="isPdfView"
       :fileName="fileName"
@@ -713,6 +900,9 @@ onMounted(async () => {
           ref="previewFrame"
           :srcdoc="typeof previewState === 'string' ? previewState : ''"
           class="w-full h-full border-none block"
+          allow="fullscreen"
+          allowfullscreen
+          @load="postFullscreenState(isFullscreen)"
         />
 
         <iframe
@@ -732,7 +922,20 @@ onMounted(async () => {
       </main>
     </div>
 
-    <StatusBar :text="statusText" :type="statusType" />
+    <!-- 全屏即沉浸阅读：收起状态栏，把最后一排像素也让给正文 -->
+    <StatusBar v-if="!isFullscreen" :text="statusText" :type="statusType" />
+
+    <!-- 预览区右键菜单：坐标由 iframe 上报后换算为视口坐标 -->
+    <PreviewContextMenu
+      v-if="ctxMenu"
+      :x="ctxMenu.x"
+      :y="ctxMenu.y"
+      :selection="ctxMenu.selection"
+      :has-folder="isFolderView && !!folderTree"
+      @copy="onCtxCopy"
+      @export="onCtxExport"
+      @close="ctxMenu = null"
+    />
 
     <!-- PDF 生成中的遮罩层 -->
     <PdfOverlay v-if="isGeneratingPdf" :text="t('pdfOverlayPreparing', settings.lang)" />

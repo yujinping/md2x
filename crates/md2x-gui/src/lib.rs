@@ -7,8 +7,8 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
-use tauri::menu::MenuItem;
-use tauri::{Manager, State};
+use tauri::menu::{CheckMenuItem, MenuItem, Submenu};
+use tauri::{Emitter, Manager, State};
 use tokio::sync::oneshot;
 
 /// 主题参数的解析辅助：前端传字符串，缺失或非法时回退到「跟随系统」。
@@ -128,15 +128,51 @@ struct AppState {
     settings_flag: Mutex<bool>,
     /// 当前打开的文件夹根目录（文件树视图），None 表示单文件视图
     folder_root: Mutex<Option<PathBuf>>,
+    /// 顶级菜单「文件」/「视图」：切语言时要改标题，故需持有句柄
+    file_menu: Mutex<Option<Submenu<tauri::Wry>>>,
+    view_menu: Mutex<Option<Submenu<tauri::Wry>>>,
     about_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     settings_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    open_file_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    close_file_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     open_folder_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     close_folder_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     quit_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// 「显示目录树」勾选项：状态由前端文件树可见性决定，需双向同步
+    toggle_tree_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// 「显示工具栏」勾选项：状态由前端 settings.toolbarVisible 决定，需双向同步
+    toggle_toolbar_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// 「全宽显示」勾选项：状态由前端 settings.fullWidth 决定，需双向同步
+    fullwidth_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// 「全屏」勾选项：勾选状态直接映射窗口全屏状态
+    fullscreen_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// 最近一次同步给菜单的全屏状态，避免每次窗口尺寸变化都做一次跨线程设置
+    fullscreen_state: Mutex<bool>,
+    /// 菜单「打开文件」点击标记，前端轮询消费
+    show_open_file_flag: Mutex<bool>,
+    /// 菜单「关闭」点击标记，前端轮询消费
+    close_file_flag: Mutex<bool>,
+    /// 菜单「显示目录树」点击标记，前端轮询消费（真正切换与勾选由前端回写）
+    toggle_tree_flag: Mutex<bool>,
+    /// 菜单「显示工具栏」点击标记，前端轮询消费（真正切换与勾选由前端回写）
+    toggle_toolbar_flag: Mutex<bool>,
+    /// 菜单「全宽显示」点击标记，前端轮询消费（真正切换与勾选由前端回写）
+    toggle_fullwidth_flag: Mutex<bool>,
     /// 菜单「打开文件夹」点击标记，前端轮询消费
     show_open_folder_flag: Mutex<bool>,
     /// 菜单「关闭文件夹」点击标记，前端轮询消费
     close_folder_flag: Mutex<bool>,
+    /// 「导出 ▸」子菜单：切语言要改标题、无文件时要整组置灰，故需持有句柄
+    export_menu: Mutex<Option<Submenu<tauri::Wry>>>,
+    /// 「导出 ▸」各格式项：无文件/无文件夹时分别置灰
+    export_folder_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    export_html_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    export_pdf_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    export_docx_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// 菜单「导出 ▸ X」请求的格式（html/pdf/docx/folder），前端轮询消费。
+    /// 用 Option<String> 而不是四个 bool：一次点击只可能产生一个格式，
+    /// 布尔组会让「同时置真」这种非法状态在类型上成立
+    export_request: Mutex<Option<String>>,
     /// 缓存的预览结果（PDF + HTML），文件没变时复用
     cached_preview: Mutex<Option<CachedPreview>>,
 }
@@ -166,12 +202,32 @@ pub fn run() {
                 .map(PathBuf::from),
         ),
         about_item: Mutex::new(None),
+        file_menu: Mutex::new(None),
+        view_menu: Mutex::new(None),
         settings_item: Mutex::new(None),
+        open_file_item: Mutex::new(None),
+        close_file_item: Mutex::new(None),
         open_folder_item: Mutex::new(None),
         close_folder_item: Mutex::new(None),
         quit_item: Mutex::new(None),
+        toggle_tree_item: Mutex::new(None),
+        toggle_toolbar_item: Mutex::new(None),
+        fullwidth_item: Mutex::new(None),
+        fullscreen_item: Mutex::new(None),
+        fullscreen_state: Mutex::new(false),
+        show_open_file_flag: Mutex::new(false),
+        close_file_flag: Mutex::new(false),
+        toggle_tree_flag: Mutex::new(false),
+        toggle_toolbar_flag: Mutex::new(false),
+        toggle_fullwidth_flag: Mutex::new(false),
         show_open_folder_flag: Mutex::new(false),
         close_folder_flag: Mutex::new(false),
+        export_menu: Mutex::new(None),
+        export_folder_item: Mutex::new(None),
+        export_html_item: Mutex::new(None),
+        export_pdf_item: Mutex::new(None),
+        export_docx_item: Mutex::new(None),
+        export_request: Mutex::new(None),
         cached_preview: Mutex::new(None),
     };
 
@@ -195,46 +251,155 @@ pub fn run() {
                     }
                 }
             }
+            // 全屏状态也可能被系统操作改变（Esc、macOS 绿灯按钮），
+            // 窗口尺寸随之变化时回读一次，保证菜单勾选与实际一致；
+            // 变化时再广播出去，预览页的浮动按钮图标才不会和窗口状态脱节
+            if let tauri::WindowEvent::Resized(_) = e {
+                if let Ok(fs) = w.is_fullscreen() {
+                    if sync_fullscreen_check(w.app_handle(), fs) {
+                        let _ = w.app_handle().emit(FULLSCREEN_EVENT, fs);
+                    }
+                }
+            }
         })
         .setup(|app| {
+            // ===== 应用菜单：只保留「关于」「退出」 =====
             let about_item: MenuItem<tauri::Wry> =
                 tauri::menu::MenuItemBuilder::with_id("about", "关于").build(app)?;
-            let settings_item: MenuItem<tauri::Wry> =
-                tauri::menu::MenuItemBuilder::with_id("settings", "设置…").build(app)?;
             let quit_item: MenuItem<tauri::Wry> =
                 tauri::menu::MenuItemBuilder::with_id("quit", "退出")
                     .accelerator("CmdOrCtrl+Q")
+                    .build(app)?;
+
+            // ===== 文件菜单：打开 / 关闭 =====
+            let open_file_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("open_file", "打开…")
+                    .accelerator("CmdOrCtrl+O")
                     .build(app)?;
             let open_folder_item: MenuItem<tauri::Wry> =
                 tauri::menu::MenuItemBuilder::with_id("open_folder", "打开文件夹…")
                     .accelerator("CmdOrCtrl+Shift+O")
                     .build(app)?;
+            let close_file_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("close_file", "关闭")
+                    .accelerator("CmdOrCtrl+W")
+                    .build(app)?;
             let close_folder_item: MenuItem<tauri::Wry> =
                 tauri::menu::MenuItemBuilder::with_id("close_folder", "关闭文件夹")
                     .accelerator("CmdOrCtrl+Shift+W")
                     .build(app)?;
+
+            // ===== 文件 → 导出 子菜单 =====
+            // 与工具栏导出按钮、预览区右键菜单同一组格式、同一条后端链路；
+            // 不加加速键：导出是有副作用的写盘操作，误触就地弹保存框的体验更差
+            let export_folder_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("export_folder", "文件夹 → 单个 HTML")
+                    .build(app)?;
+            let export_html_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("export_html", "HTML").build(app)?;
+            let export_pdf_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("export_pdf", "PDF").build(app)?;
+            let export_docx_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("export_docx", "Word（docx）").build(app)?;
+            let export_menu: Submenu<tauri::Wry> = tauri::menu::SubmenuBuilder::new(app, "导出")
+                .item(&export_folder_item)
+                .separator()
+                .item(&export_html_item)
+                .item(&export_pdf_item)
+                .item(&export_docx_item)
+                .build()?;
+
+            // ===== 视图菜单：工具栏 / 目录树 / 全宽 / 全屏 / 设置 =====
+            // 工具栏勾选状态由前端（settings.toolbarVisible）回写，默认隐藏
+            // （工具栏收起来后正文区域更大，纯阅读场景才是主用法）。
+            // 刻意不设加速键：它与目录树的 ⌘B 属于同一层级的功能开关，
+            // 再抢一个组合键反而会和常用编辑快捷键冲突
+            let toggle_toolbar_item: CheckMenuItem<tauri::Wry> =
+                tauri::menu::CheckMenuItemBuilder::with_id("toggle_toolbar", "显示工具栏")
+                    .checked(false)
+                    .build(app)?;
+            // 目录树勾选状态由前端（文件树可见性）回写，这里给初始值 true（默认展开）
+            let toggle_tree_item: CheckMenuItem<tauri::Wry> =
+                tauri::menu::CheckMenuItemBuilder::with_id("toggle_tree", "显示目录树")
+                    .checked(true)
+                    .accelerator("CmdOrCtrl+B")
+                    .build(app)?;
+            // 全宽显示：与工具栏那个按钮同一份状态（settings.fullWidth），
+            // 初始值由前端挂载时回写，这里先给 false
+            let fullwidth_item: CheckMenuItem<tauri::Wry> =
+                tauri::menu::CheckMenuItemBuilder::with_id("toggle_fullwidth", "全宽显示")
+                    .checked(false)
+                    .build(app)?;
+            // 全屏加速键按平台区分：macOS 沿用系统惯例 ⌃⌘F，其余平台 F11
+            let fullscreen_accel = if cfg!(target_os = "macos") {
+                "CTRL+CMD+F"
+            } else {
+                "F11"
+            };
+            let fullscreen_item: CheckMenuItem<tauri::Wry> =
+                tauri::menu::CheckMenuItemBuilder::with_id("fullscreen", "全屏")
+                    .checked(false)
+                    .accelerator(fullscreen_accel)
+                    .build(app)?;
+            let settings_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("settings", "设置…")
+                    .accelerator("CmdOrCtrl+,")
+                    .build(app)?;
+
+            let app_menu = tauri::menu::SubmenuBuilder::new(app, "md2x")
+                .item(&about_item)
+                .separator()
+                .item(&quit_item)
+                .build()?;
+            let file_menu: Submenu<tauri::Wry> = tauri::menu::SubmenuBuilder::new(app, "文件")
+                .item(&open_file_item)
+                .item(&open_folder_item)
+                .separator()
+                .item(&export_menu)
+                .separator()
+                .item(&close_file_item)
+                .item(&close_folder_item)
+                .build()?;
+            let view_menu: Submenu<tauri::Wry> = tauri::menu::SubmenuBuilder::new(app, "视图")
+                .item(&toggle_toolbar_item)
+                .item(&toggle_tree_item)
+                .item(&fullwidth_item)
+                .item(&fullscreen_item)
+                .separator()
+                .item(&settings_item)
+                .build()?;
+
             let menu = tauri::menu::MenuBuilder::new(app)
-                .item(
-                    &tauri::menu::SubmenuBuilder::new(app, "md2x")
-                        .item(&about_item)
-                        .separator()
-                        .item(&open_folder_item)
-                        .item(&close_folder_item)
-                        .separator()
-                        .item(&settings_item)
-                        .separator()
-                        .item(&quit_item)
-                        .build()?,
-                )
+                .items(&[&app_menu, &file_menu, &view_menu])
                 .build()?;
             app.set_menu(menu)?;
-            // 保存菜单项引用供语言切换
+            // 保存菜单项引用供语言切换与状态同步
             if let Some(state) = app.try_state::<AppState>() {
                 *state.about_item.lock().unwrap() = Some(about_item);
                 *state.settings_item.lock().unwrap() = Some(settings_item);
+                *state.open_file_item.lock().unwrap() = Some(open_file_item);
+                *state.close_file_item.lock().unwrap() = Some(close_file_item);
                 *state.open_folder_item.lock().unwrap() = Some(open_folder_item);
                 *state.close_folder_item.lock().unwrap() = Some(close_folder_item);
                 *state.quit_item.lock().unwrap() = Some(quit_item);
+                *state.toggle_toolbar_item.lock().unwrap() = Some(toggle_toolbar_item);
+                *state.toggle_tree_item.lock().unwrap() = Some(toggle_tree_item);
+                *state.fullwidth_item.lock().unwrap() = Some(fullwidth_item);
+                *state.fullscreen_item.lock().unwrap() = Some(fullscreen_item);
+                *state.file_menu.lock().unwrap() = Some(file_menu);
+                *state.view_menu.lock().unwrap() = Some(view_menu);
+                *state.export_menu.lock().unwrap() = Some(export_menu);
+                *state.export_folder_item.lock().unwrap() = Some(export_folder_item);
+                *state.export_html_item.lock().unwrap() = Some(export_html_item);
+                *state.export_pdf_item.lock().unwrap() = Some(export_pdf_item);
+                *state.export_docx_item.lock().unwrap() = Some(export_docx_item);
+            }
+            // 启动参数可能直接带文件/文件夹（双击 .md、`md2x --folder`），
+            // 此时窗口还停在配置里的默认标题，需要按实际打开内容纠正一次
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Some(win) = app.get_webview_window("main") {
+                    apply_window_title(&win, &state);
+                }
             }
             Ok(())
         })
@@ -251,6 +416,49 @@ pub fn run() {
                     if let Ok(mut flag) = state.settings_flag.lock() {
                         *flag = true;
                     }
+                }
+            }
+            "open_file" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.show_open_file_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "close_file" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.close_file_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "toggle_tree" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.toggle_tree_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "toggle_toolbar" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.toggle_toolbar_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "toggle_fullwidth" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.toggle_fullwidth_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "fullscreen" => {
+                // 全屏由后端直接翻转窗口状态，无需前端参与；
+                // 勾选状态以窗口实际状态为准（Esc / 绿灯退出时也能纠正）
+                if let Some(win) = app.get_webview_window("main") {
+                    let next = !win.is_fullscreen().unwrap_or(false);
+                    apply_fullscreen(&win, next);
                 }
             }
             "open_folder" => {
@@ -270,7 +478,18 @@ pub fn run() {
             "quit" => {
                 app.exit(0);
             }
-            _ => {}
+            // 导出子菜单：只记录格式，真正的保存对话框与写盘都在前端
+            // （与工具栏按钮、预览右键菜单共用同一实现，避免两条导出链路跑偏）
+            id => {
+                let Some(format) = export_format_of(id) else {
+                    return;
+                };
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut req) = state.export_request.lock() {
+                        *req = Some(format.to_string());
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             set_file,
@@ -290,6 +509,13 @@ pub fn run() {
             get_app_info,
             check_show_about,
             check_show_settings,
+            check_show_open_file,
+            check_show_close_file,
+            check_toggle_tree,
+            check_toggle_toolbar,
+            check_toggle_fullwidth,
+            toggle_fullscreen,
+            sync_menu_state,
             set_menu_language,
             open_folder,
             close_folder,
@@ -298,6 +524,8 @@ pub fn run() {
             path_kind,
             check_show_open_folder,
             check_show_close_folder,
+            check_menu_export,
+            is_fullscreen,
             register_default_md_handler,
             list_templates,
             open_templates_dir,
@@ -414,11 +642,12 @@ fn read_file_chunk(path: String, offset: usize) -> Result<(String, bool), String
 
 /// 设置当前文件，记录初始 mtime 供前端轮询检测变更
 #[tauri::command]
-fn set_file(path: String, s: State<AppState>) -> Result<(), String> {
-    let p = if path.starts_with("file://") {
-        PathBuf::from(path.strip_prefix("file://").unwrap_or(&path))
-    } else {
-        PathBuf::from(&path)
+fn set_file(path: String, s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), String> {
+    // 拖拽与 macOS 的「用 md2x 打开」都可能传 file URL：
+    // Windows 下是 file:///C:/x，直接 strip_prefix 会得到 "/C:/x" 而判定不存在
+    let p = match file_url_to_path(&path) {
+        Some(p) => p,
+        None => PathBuf::from(&path),
     };
     if !p.exists() {
         return Err(format!("文件不存在: {}", p.display()));
@@ -434,6 +663,9 @@ fn set_file(path: String, s: State<AppState>) -> Result<(), String> {
 
     // 清空预览缓存（文件已切换）
     *s.cached_preview.lock().map_err(|e| e.to_string())? = None;
+
+    // 标题跟着当前文件走（放在最后：前面任何一步失败都不该改标题）
+    apply_window_title(&window, &s);
 
     Ok(())
 }
@@ -477,6 +709,196 @@ fn check_show_settings(s: State<AppState>) -> bool {
     val
 }
 
+/// 前端轮询：检查菜单「文件 → 打开…」是否被点击
+#[tauri::command]
+fn check_show_open_file(s: State<AppState>) -> bool {
+    let mut guard = s.show_open_file_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「文件 → 关闭」是否被点击
+#[tauri::command]
+fn check_show_close_file(s: State<AppState>) -> bool {
+    let mut guard = s.close_file_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「视图 → 显示目录树」是否被点击
+#[tauri::command]
+fn check_toggle_tree(s: State<AppState>) -> bool {
+    let mut guard = s.toggle_tree_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「视图 → 显示工具栏」是否被点击
+#[tauri::command]
+fn check_toggle_toolbar(s: State<AppState>) -> bool {
+    let mut guard = s.toggle_toolbar_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「视图 → 全宽显示」是否被点击
+#[tauri::command]
+fn check_toggle_fullwidth(s: State<AppState>) -> bool {
+    let mut guard = s.toggle_fullwidth_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 菜单项 id → 导出格式串（前端 `export_<格式>` 命令的后缀）。
+///
+/// 单独抽成纯函数是为了能单测：id 与格式的对应关系一旦写错，
+/// 「点了 PDF 却导出 docx」在界面上极难一眼发现，而重定向到不存在的
+/// 命令还会静默失败成一条状态栏错误。
+fn export_format_of(id: &str) -> Option<&'static str> {
+    match id {
+        "export_folder" => Some("folder"),
+        "export_html" => Some("html"),
+        "export_pdf" => Some("pdf"),
+        "export_docx" => Some("docx"),
+        _ => None,
+    }
+}
+
+/// 前端轮询：检查菜单「文件 → 导出 ▸ X」是否被点击。
+/// 返回格式字符串（html/pdf/docx/folder），无请求时返回 None
+#[tauri::command]
+fn check_menu_export(s: State<AppState>) -> Option<String> {
+    s.export_request.lock().ok().and_then(|mut req| req.take())
+}
+
+/// 前端回写菜单状态：目录树/工具栏可见性、全宽状态与勾选保持一致。
+/// 前端是这些状态的唯一来源（工具栏按钮、全宽模式、打开文件夹、设置项都会改变它们），
+/// 因此每次变化都需要把结果同步回菜单，否则勾选会与实际显示不符。
+#[tauri::command]
+fn sync_menu_state(
+    tree_visible: bool,
+    tree_enabled: bool,
+    full_width: bool,
+    toolbar_visible: bool,
+    has_file: bool,
+    has_folder: bool,
+    s: State<AppState>,
+) -> Result<(), String> {
+    {
+        let item = s.toggle_tree_item.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_enabled(tree_enabled).ok();
+            it.set_checked(tree_visible && tree_enabled).ok();
+        }
+    }
+    {
+        let item = s.fullwidth_item.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_checked(full_width).ok();
+        }
+    }
+    {
+        let item = s.toggle_toolbar_item.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_checked(toolbar_visible).ok();
+        }
+    }
+    // 导出组：没有可导出的内容时整组置灰，比点了再报错更符合预期；
+    // 「文件夹 → 单个 HTML」只在确实打开了文件夹时可用
+    {
+        let item = s.export_menu.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_enabled(has_file || has_folder).ok();
+        }
+    }
+    for (slot, enabled) in [
+        (&s.export_html_item, has_file),
+        (&s.export_pdf_item, has_file),
+        (&s.export_docx_item, has_file),
+        (&s.export_folder_item, has_folder),
+    ] {
+        let item = slot.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_enabled(enabled).ok();
+        }
+    }
+    Ok(())
+}
+
+/// 把全屏状态同步到菜单勾选项；仅在状态变化时写入，避免窗口拖拽缩放期间反复跨线程调用。
+///
+/// 返回是否发生了变化——调用方据此决定要不要再往前端广播一次，
+/// 免得每次拖动窗口尺寸都发一条无意义的事件。
+fn sync_fullscreen_check(app: &tauri::AppHandle, fullscreen: bool) -> bool {
+    let Some(state) = app.try_state::<AppState>() else {
+        return false;
+    };
+    let changed = state
+        .fullscreen_state
+        .lock()
+        .map(|mut cur| {
+            let changed = *cur != fullscreen;
+            *cur = fullscreen;
+            changed
+        })
+        .unwrap_or(true);
+    if !changed {
+        return false;
+    }
+    // 先把菜单项取出（克隆），避免后续借用与 state 生命周期缠绕
+    let item = state
+        .fullscreen_item
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone());
+    if let Some(it) = item {
+        it.set_checked(fullscreen).ok();
+    }
+    true
+}
+
+/// 全屏状态变化事件名：前端据此把状态回写给预览 iframe 里的浮动按钮
+const FULLSCREEN_EVENT: &str = "md2x://fullscreen";
+
+/// 切换窗口全屏并广播状态。
+///
+/// 菜单项、⌃⌘F 加速键、预览页浮动按钮三处入口共用，避免各写一遍取反/同步/广播；
+/// 失败时返回原状态（`!next`），调用方无需再判断。
+fn apply_fullscreen(window: &tauri::WebviewWindow, next: bool) -> bool {
+    if window.set_fullscreen(next).is_err() {
+        return !next;
+    }
+    sync_fullscreen_check(window.app_handle(), next);
+    let _ = window.app_handle().emit(FULLSCREEN_EVENT, next);
+    next
+}
+
+/// 预览页浮动按钮转交的全屏请求。
+///
+/// md2x 的预览跑在 `<iframe srcdoc>` 里，而 WebView 本身（macOS 12 的 WKWebView）
+/// 没有 `Element.requestFullscreen`，iframe 内又受权限策略限制——所以「让文档全屏」
+/// 这条路在应用内不可用。改为切换**整个窗口**的全屏，与菜单项、⌃⌘F 走同一条路径，
+/// 勾选状态也由同一处同步。返回切换后的状态，前端据此回写 iframe 里的按钮图标。
+#[tauri::command]
+fn toggle_fullscreen(window: tauri::WebviewWindow) -> bool {
+    let next = !window.is_fullscreen().unwrap_or(false);
+    apply_fullscreen(&window, next)
+}
+
+/// 读取当前窗口全屏状态。
+///
+/// 前端启动时要按真实状态决定底部状态栏是否显示——窗口若是带着全屏配置启动，
+/// 不会有任何 Resized 事件，光等 `md2x://fullscreen` 广播会漏掉初始态。
+#[tauri::command]
+fn is_fullscreen(window: tauri::WebviewWindow) -> bool {
+    window.is_fullscreen().unwrap_or(false)
+}
+
 /// 前端轮询：检查菜单「打开文件夹」是否被点击
 #[tauri::command]
 fn check_show_open_folder(s: State<AppState>) -> bool {
@@ -496,49 +918,60 @@ fn check_show_close_folder(s: State<AppState>) -> bool {
 }
 
 /// 切换菜单文本语言
+/// 标签集中在此处以「中文 / English」成对维护，新增菜单项只需追加一行 `set_text!`
 #[tauri::command]
 fn set_menu_language(lang: String, s: State<AppState>) -> Result<(), String> {
+    let en = lang == "en";
+    macro_rules! set_text {
+        ($slot:expr, $zh:literal, $en_text:literal) => {
+            if let Some(ref it) = *$slot {
+                it.set_text(if en { $en_text } else { $zh }).ok();
+            }
+        };
+    }
+
+    let file_menu = s.file_menu.lock().map_err(|e| e.to_string())?;
+    let view_menu = s.view_menu.lock().map_err(|e| e.to_string())?;
     let about = s.about_item.lock().map_err(|e| e.to_string())?;
-    let settings = s.settings_item.lock().map_err(|e| e.to_string())?;
+    let quit = s.quit_item.lock().map_err(|e| e.to_string())?;
+    let open_file = s.open_file_item.lock().map_err(|e| e.to_string())?;
+    let close_file = s.close_file_item.lock().map_err(|e| e.to_string())?;
     let open_folder = s.open_folder_item.lock().map_err(|e| e.to_string())?;
     let close_folder = s.close_folder_item.lock().map_err(|e| e.to_string())?;
-    let quit = s.quit_item.lock().map_err(|e| e.to_string())?;
-    match lang.as_str() {
-        "en" => {
-            if let Some(ref item) = *about {
-                item.set_text("About").ok();
-            }
-            if let Some(ref item) = *settings {
-                item.set_text("Settings…").ok();
-            }
-            if let Some(ref item) = *open_folder {
-                item.set_text("Open Folder…").ok();
-            }
-            if let Some(ref item) = *close_folder {
-                item.set_text("Close Folder").ok();
-            }
-            if let Some(ref item) = *quit {
-                item.set_text("Quit").ok();
-            }
-        }
-        _ => {
-            if let Some(ref item) = *about {
-                item.set_text("关于").ok();
-            }
-            if let Some(ref item) = *settings {
-                item.set_text("设置…").ok();
-            }
-            if let Some(ref item) = *open_folder {
-                item.set_text("打开文件夹…").ok();
-            }
-            if let Some(ref item) = *close_folder {
-                item.set_text("关闭文件夹").ok();
-            }
-            if let Some(ref item) = *quit {
-                item.set_text("退出").ok();
-            }
-        }
-    }
+    let export_menu = s.export_menu.lock().map_err(|e| e.to_string())?;
+    let export_folder = s.export_folder_item.lock().map_err(|e| e.to_string())?;
+    let export_html = s.export_html_item.lock().map_err(|e| e.to_string())?;
+    let export_pdf = s.export_pdf_item.lock().map_err(|e| e.to_string())?;
+    let export_docx = s.export_docx_item.lock().map_err(|e| e.to_string())?;
+    let toggle_tree = s.toggle_tree_item.lock().map_err(|e| e.to_string())?;
+    let toggle_toolbar = s.toggle_toolbar_item.lock().map_err(|e| e.to_string())?;
+    let fullwidth = s.fullwidth_item.lock().map_err(|e| e.to_string())?;
+    let fullscreen = s.fullscreen_item.lock().map_err(|e| e.to_string())?;
+    let settings = s.settings_item.lock().map_err(|e| e.to_string())?;
+
+    // 顶级菜单
+    set_text!(file_menu, "文件", "File");
+    set_text!(view_menu, "视图", "View");
+    // 应用菜单
+    set_text!(about, "关于", "About");
+    set_text!(quit, "退出", "Quit");
+    // 文件菜单
+    set_text!(open_file, "打开…", "Open…");
+    set_text!(open_folder, "打开文件夹…", "Open Folder…");
+    set_text!(close_file, "关闭", "Close");
+    set_text!(close_folder, "关闭文件夹", "Close Folder");
+    // 文件 → 导出
+    set_text!(export_menu, "导出", "Export");
+    set_text!(export_folder, "文件夹 → 单个 HTML", "Folder → Single HTML");
+    set_text!(export_html, "HTML", "HTML");
+    set_text!(export_pdf, "PDF", "PDF");
+    set_text!(export_docx, "Word（docx）", "Word (DOCX)");
+    // 视图菜单
+    set_text!(toggle_toolbar, "显示工具栏", "Show Toolbar");
+    set_text!(toggle_tree, "显示目录树", "Show Directory Tree");
+    set_text!(fullwidth, "全宽显示", "Full Width");
+    set_text!(fullscreen, "全屏", "Full Screen");
+    set_text!(settings, "设置…", "Settings…");
     Ok(())
 }
 
@@ -967,18 +1400,22 @@ fn get_file_name(s: State<AppState>) -> Result<Option<String>, String> {
 /// 获取当前打开文件的完整路径（前端用来解析相对链接的基准目录）
 #[tauri::command]
 fn get_file_path(s: State<AppState>) -> Option<String> {
+    // 统一 / 分隔：与 scan_tree 返回的节点 path 保持同一格式，
+    // 否则 Windows 下前端用 startsWith / split 比较会全部失配
     s.current_file
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .and_then(|g| g.as_ref().map(|p| normalize_path(p)))
 }
 
 /// 清空当前打开的文件（切换文件夹卸载旧预览时用），回到无文件初始状态
 #[tauri::command]
-fn clear_file(s: State<AppState>) -> Result<(), String> {
+fn clear_file(s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), String> {
     *s.current_file.lock().map_err(|e| e.to_string())? = None;
     *s.last_known_mtime.lock().map_err(|e| e.to_string())? = None;
     *s.cached_preview.lock().map_err(|e| e.to_string())? = None;
+    // 只关文件不清文件夹时，标题会回落到文件夹名
+    apply_window_title(&window, &s);
     Ok(())
 }
 
@@ -986,29 +1423,36 @@ fn clear_file(s: State<AppState>) -> Result<(), String> {
 
 /// 打开文件夹：记录根目录并递归扫描生成 .md 文件树（剪除不含 Markdown 的目录）
 #[tauri::command]
-fn open_folder(path: String, s: State<AppState>) -> Result<Vec<TreeNode>, String> {
+fn open_folder(
+    path: String,
+    s: State<AppState>,
+    window: tauri::WebviewWindow,
+) -> Result<Vec<TreeNode>, String> {
     let p = PathBuf::from(&path);
     if !p.is_dir() {
         return Err(format!("不是有效的文件夹: {}", p.display()));
     }
     *s.folder_root.lock().map_err(|e| e.to_string())? = Some(p.clone());
+    apply_window_title(&window, &s);
     scan_tree(&p)
 }
 
 /// 关闭文件夹：回到单文件视图
 #[tauri::command]
-fn close_folder(s: State<AppState>) -> Result<(), String> {
+fn close_folder(s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), String> {
     *s.folder_root.lock().map_err(|e| e.to_string())? = None;
+    apply_window_title(&window, &s);
     Ok(())
 }
 
 /// 获取当前打开的文件夹根目录（用于启动时自动展开文件树）
 #[tauri::command]
 fn get_folder_path(s: State<AppState>) -> Option<String> {
+    // 同 get_file_path：统一 / 分隔，前端按 '/' split 取文件夹名才成立
     s.folder_root
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|p| p.to_string_lossy().to_string()))
+        .and_then(|g| g.as_ref().map(|p| normalize_path(p)))
 }
 
 /// 判断路径类型："dir" / "file" / "none"（拖拽、启动参数判断用）
@@ -1073,6 +1517,115 @@ fn is_markdown(name: &str) -> bool {
 /// 路径统一为 / 分隔（跨平台比较、拼接用）
 fn normalize_path(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
+}
+
+// ==================== 窗口标题 ====================
+
+/// 应用名，标题栏在无打开内容时的兜底文本
+const APP_NAME: &str = "md2x";
+
+/// 路径在标题里的显示名：取文件名；根目录（`/`、`C:\`）没有 file_name，
+/// 退回整串路径，避免标题变成空串。
+fn title_label(p: &Path) -> String {
+    match p.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name.to_string(),
+        None => normalize_path(p),
+    }
+}
+
+/// 组装标题的纯函数：`文件名 — md2x`，无文件时用文件夹名，都没有就是 `md2x`。
+///
+/// 后端是「当前打开了什么」的唯一来源，标题也在这里推导，
+/// 前端不需要额外调一次 setTitle——多一条链路就多一处可能不同步。
+fn title_from(current: Option<&Path>, folder: Option<&Path>) -> String {
+    match current.or(folder) {
+        Some(p) => format!("{} — {APP_NAME}", title_label(p)),
+        None => APP_NAME.to_string(),
+    }
+}
+
+/// 从状态里取当前标题（读锁失败按「什么都没打开」处理，标题不该因锁中毒而报错）
+fn window_title(s: &AppState) -> String {
+    let current = s.current_file.lock().ok().and_then(|g| g.clone());
+    let folder = s.folder_root.lock().ok().and_then(|g| g.clone());
+    title_from(current.as_deref(), folder.as_deref())
+}
+
+/// 把标题写回窗口；标题未变化时跳过，避免无谓的跨线程 UI 调用。
+fn apply_window_title(window: &tauri::WebviewWindow, s: &AppState) {
+    let title = window_title(s);
+    if window.title().ok().as_deref() == Some(title.as_str()) {
+        return;
+    }
+    let _ = window.set_title(&title);
+}
+
+/// 百分号解码：`%E4%B8%AD` → `中`，非法的 `%` 序列按字面量保留。
+///
+/// 只用于 file URL 还原：URL 中的空格、中文都是编码形态，不解码就找不到文件。
+/// 注意 `+` 在路径语义里是字面量，不按表单规则转空格。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = |b: u8| -> Option<u8> {
+                match b {
+                    b'0'..=b'9' => Some(b - b'0'),
+                    b'a'..=b'f' => Some(b - b'a' + 10),
+                    b'A'..=b'F' => Some(b - b'A' + 10),
+                    _ => None,
+                }
+            };
+            if let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// file URL 去掉 scheme 后的部分 → 路径字符串。`windows` 显式传入以便跨平台单测。
+///
+/// - Unix：`/a/b` → `/a/b`
+/// - Windows 盘符：`/C:/a/b` → `C:\a\b`
+/// - Windows UNC：`server/share/a`（`file://server/...`）与 `//server/share/a`
+///   （`file:////server/...`）都还原为 `\\server\share\a`
+fn file_url_rest_to_path_str(rest: &str, windows: bool) -> String {
+    let decoded = percent_decode(rest);
+    if !windows {
+        return decoded;
+    }
+    let (unc, body) = if let Some(b) = decoded.strip_prefix("//") {
+        (true, b)
+    } else if let Some(b) = decoded.strip_prefix('/') {
+        // 形如 "/C:/a"：盘符前的分隔符要去掉，否则得到 "\C:\a"
+        (false, b)
+    } else {
+        // 不带前导斜杠 ⇒ file://host/share 形式，按 UNC 处理
+        (true, decoded.as_str())
+    };
+    let mut s = if unc { String::from(r"\\") } else { String::new() };
+    s.push_str(&body.replace('/', "\\"));
+    s
+}
+
+/// file URL → 本地路径；非 file URL 返回 None。
+fn file_url_to_path(raw: &str) -> Option<PathBuf> {
+    let rest = raw.strip_prefix("file://")?;
+    // file URL 可能带查询串或锚点（如 file:///a.md?v=1）
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let p = file_url_rest_to_path_str(rest, cfg!(windows));
+    if p.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(p))
+    }
 }
 
 // ==================== Git 仓库相对路径 ====================
@@ -1377,6 +1930,19 @@ fn b64(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// 导出菜单 id 必须一一映射到前端认识的后缀，未知 id 返回 None（静默忽略）
+    #[test]
+    fn export_menu_ids_map_to_expected_formats() {
+        assert_eq!(export_format_of("export_folder"), Some("folder"));
+        assert_eq!(export_format_of("export_html"), Some("html"));
+        assert_eq!(export_format_of("export_pdf"), Some("pdf"));
+        assert_eq!(export_format_of("export_docx"), Some("docx"));
+        // 其他菜单项（打开、关闭、设置…）不能被误判成导出请求
+        for id in ["open_file", "close_file", "settings", "toggle_tree", ""] {
+            assert_eq!(export_format_of(id), None, "{id} 不该被当成导出格式");
+        }
+    }
+
     /// 仅收集 .md（忽略大小写），剪除不含 Markdown 的目录，目录优先排序
     #[test]
     fn scan_tree_collects_only_md_and_prunes_empty_dirs() {
@@ -1433,5 +1999,81 @@ mod tests {
         assert_eq!(repo_relative_label(&base.join("outside.md")), None);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 标题优先级：当前文件 > 文件夹根 > 应用名。
+    /// 三点都要断言——只测有文件的情况会漏掉「关掉文件后标题没回落」这类缺陷。
+    #[test]
+    fn 窗口标题按文件优先于文件夹() {
+        let file = PathBuf::from("/repo/docs/guide/intro.md");
+        let dir = PathBuf::from("/repo/docs");
+        assert_eq!(title_from(Some(&file), None), "intro.md — md2x");
+        // 同时打开文件夹与文件时，标题显示文件名而不是文件夹名
+        assert_eq!(title_from(Some(&file), Some(&dir)), "intro.md — md2x");
+        // 只开文件夹（尚未点开任何文件）
+        assert_eq!(title_from(None, Some(&dir)), "docs — md2x");
+        // 都没打开
+        assert_eq!(title_from(None, None), "md2x");
+    }
+
+    /// 根目录没有 file_name，标题要退回整串路径而不是留空
+    #[test]
+    fn 窗口标题在根目录下退回路径() {
+        let root = PathBuf::from("/");
+        assert_eq!(title_from(None, Some(&root)), "/ — md2x");
+    }
+
+    #[test]
+    fn 百分号解码还原空格与中文() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(
+            percent_decode("%E6%9E%B6%E6%9E%84.html"),
+            "架构.html"
+        );
+        // 非法序列按字面量保留，不能吞字符
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        // '+' 在路径里是字面量，不转空格
+        assert_eq!(percent_decode("a+b"), "a+b");
+    }
+
+    /// Windows 的 file URL 是 `file:///C:/a/b`，去掉 scheme 后是 `/C:/a/b`，
+    /// 直接当路径用会得到 `\C:\a\b` 而判定文件不存在。
+    #[test]
+    fn file_url_还原windows盘符路径() {
+        assert_eq!(file_url_rest_to_path_str("/C:/a/b.md", true), r"C:\a\b.md");
+        assert_eq!(
+            file_url_rest_to_path_str("/C:/Users/a%20b.md", true),
+            r"C:\Users\a b.md"
+        );
+    }
+
+    #[test]
+    fn file_url_还原windows_unc路径() {
+        // file://server/share → 去掉 scheme 后无前导斜杠
+        assert_eq!(
+            file_url_rest_to_path_str("server/share/a.md", true),
+            r"\\server\share\a.md"
+        );
+        // file:////server/share（RFC 形式）→ 去掉 scheme 后以 // 开头
+        assert_eq!(
+            file_url_rest_to_path_str("//server/share/a.md", true),
+            r"\\server\share\a.md"
+        );
+    }
+
+    #[test]
+    fn file_url_还原unix路径() {
+        assert_eq!(file_url_rest_to_path_str("/tmp/a.md", false), "/tmp/a.md");
+        assert_eq!(
+            file_url_rest_to_path_str("/tmp/a%20b.md", false),
+            "/tmp/a b.md"
+        );
+    }
+
+    #[test]
+    fn 非file协议不当作路径() {
+        assert!(file_url_to_path("https://example.com/a.md").is_none());
+        assert!(file_url_to_path("/plain/path.md").is_none());
     }
 }
