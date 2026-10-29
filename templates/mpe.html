@@ -214,42 +214,6 @@
       margin-bottom: 16px;
       padding-left: 12px;
       white-space: nowrap;
-      /* 标题与批量按钮同行，靠右分布 */
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .sidebar-bulk {
-      margin-left: auto;
-      display: flex;
-      align-items: center;
-      gap: 2px;
-    }
-    .toc-bulk-btn {
-      width: 22px;
-      height: 22px;
-      padding: 0;
-      border: none;
-      border-radius: 4px;
-      background: transparent;
-      color: var(--fg-dim);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: color 0.15s, background 0.15s;
-    }
-    .toc-bulk-btn svg {
-      width: 13px;
-      height: 13px;
-    }
-    .toc-bulk-btn:hover {
-      color: var(--accent);
-      background: var(--bg-hover);
-    }
-    /* 无标题时（TOC 为空）隐藏批量按钮 */
-    .sidebar.no-toc .sidebar-bulk {
-      display: none;
     }
     /* 侧栏收起状态（仅控制视觉，width 由 JS 管理） */
     .sidebar.collapsed {
@@ -1459,15 +1423,6 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-title">
         <span>目录</span>
-        <!-- 批量展开 / 收起：仅作用于目录树本身 -->
-        <span class="sidebar-bulk">
-          <button type="button" id="tocExpandAll" class="toc-bulk-btn" title="全部展开" aria-label="全部展开">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 6.5L8 4l2.5 2.5"/><path d="M5.5 12.5L8 10l2.5 2.5"/><path d="M3 6.5h10"/><path d="M3 12.5h10"/></svg>
-          </button>
-          <button type="button" id="tocCollapseAll" class="toc-bulk-btn" title="全部收起" aria-label="全部收起">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4L8 6.5 10.5 4"/><path d="M5.5 12.5L8 10l2.5 2.5"/><path d="M3 6.5h10"/><path d="M3 12.5h10"/></svg>
-          </button>
-        </span>
       </div>
       <ul class="toc" id="toc">{{TOC}}</ul>
       <div class="doc-tree-wrap" id="docTreeWrap">
@@ -1846,32 +1801,6 @@
         }
       });
     });
-
-    // 统一设置所有节点的展开态，并同步 aria 与持久化
-    // 叶子节点始终保持 expanded：它们没有子树，折叠无意义，且保持箭头状态一致
-    function setAllExpanded(expanded) {
-      document.querySelectorAll('.toc-node').forEach(function(li) {
-        var isLeaf = li.getAttribute('data-leaf') === '1';
-        var next = isLeaf ? true : expanded;
-        li.classList.toggle('expanded', next);
-        var btn = li.querySelector(':scope > .toc-row > .toc-toggle');
-        if (btn) btn.setAttribute('aria-expanded', next ? 'true' : 'false');
-      });
-      saveCollapsed(collectCollapsed());
-    }
-
-    var expandAllBtn = document.getElementById('tocExpandAll');
-    var collapseAllBtn = document.getElementById('tocCollapseAll');
-    if (expandAllBtn) {
-      expandAllBtn.addEventListener('click', function() { setAllExpanded(true); });
-    }
-    if (collapseAllBtn) {
-      collapseAllBtn.addEventListener('click', function() { setAllExpanded(false); });
-    }
-    // 文档无任何标题时隐藏批量按钮，避免给出无效入口
-    if (!document.querySelector('.toc-node') && sidebar) {
-      sidebar.classList.add('no-toc');
-    }
 
     // 打印 / 导出 PDF 时目录整体隐藏，此处兜底把所有节点展开以防样式被外部覆盖
     window.addEventListener('beforeprint', function() {
