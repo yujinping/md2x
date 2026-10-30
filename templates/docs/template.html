@@ -44,6 +44,7 @@
     --bg-soft: #f7f8fa;
     --border: #e3e7ec;
     --accent: #2f6feb;
+    --doc-font-size: 15.5px;
     --code-bg: #f6f8fa;
     --content-max-width: 780px;
   }
@@ -115,7 +116,10 @@
   .nav a:hover { color: var(--fg); background: rgba(127, 127, 127, .1); }
   .nav a.is-active {
     color: var(--accent);
+    /* 兜底：不支持 color-mix 的浏览器仍得到淡蓝底 */
     background: rgba(47, 111, 235, .1);
+    /* 跟随「主色」变量，改了配色不会留下一条蓝色底 */
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
     border-left-color: var(--accent);
     font-weight: 600;
   }
@@ -132,7 +136,7 @@
   .markdown-body {
     max-width: var(--content-max-width);
     margin: 0 auto;
-    font-size: 15.5px;
+    font-size: var(--doc-font-size);
     line-height: 1.78;
     color: var(--fg);
     background: transparent;
@@ -199,6 +203,8 @@
     .main-content { margin-left: 0; padding: 32px 20px 80px; }
   }
 </style>
+<!-- 用户自定义变量（设置 → 导出 → 模版变量）：未改动任何变量时下面的样式块为空，页面与上面写的完全一致 -->
+<style>{{VARS_CSS}}</style>
 </head>
 <body>
   <aside class="sidebar">

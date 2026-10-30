@@ -3,5 +3,18 @@
   "description": "自带模版：单栏窄幅、顶部目录框，适合长文阅读与打印",
   "version": "1.0.0",
   "author": "md2x",
-  "preview": "preview.svg"
+  "preview": "preview.svg",
+  "vars": {
+    "accent": {
+      "label": "主色",
+      "default": "#0969da",
+      "type": "color",
+      "hint": "标题、链接与目录强调色"
+    },
+    "doc_font_size": {
+      "label": "正文字号",
+      "default": "15.5px",
+      "hint": "带单位，如 15.5px / 17px"
+    }
+  }
 }

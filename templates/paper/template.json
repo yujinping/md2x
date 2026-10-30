@@ -3,5 +3,23 @@
   "description": "自带模版：衬线正文、居中书名、首行缩进，打印为 PDF 时带独立目录页，适合汇报与论文",
   "version": "1.0.0",
   "author": "md2x",
-  "preview": "preview.svg"
+  "preview": "preview.svg",
+  "vars": {
+    "accent": {
+      "label": "强调色",
+      "default": "#8a3324",
+      "type": "color",
+      "hint": "目录悬停与链接；正文本身保持墨色"
+    },
+    "doc_font_size": {
+      "label": "正文字号",
+      "default": "16px",
+      "hint": "带单位，如 16px / 18px"
+    },
+    "font_family": {
+      "label": "正文字体",
+      "default": "Songti SC, STSong, SimSun, Source Han Serif SC, Georgia, serif",
+      "hint": "CSS font-family 列表；换黑体可填 PingFang SC, Microsoft YaHei, sans-serif"
+    }
+  }
 }

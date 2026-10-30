@@ -755,6 +755,14 @@ onMounted(async () => {
     loadPreview()
   })
 
+  // 模版变量（配色、字号…）改动后同样要重渲染：后端读到的取值变了，
+  // 但若前端不重新拉取，预览会停在旧配色上，看起来像「设置没生效」
+  watch(() => settings.templateVarsRev, () => {
+    if (isPdfView.value) return
+    if (!hasFile.value) return
+    loadPreview()
+  })
+
   setInterval(async () => {
     try {
       if (await invoke('check_file_changed')) {

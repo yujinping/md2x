@@ -35,6 +35,7 @@ cargo run -p md2x-cli -- README.md --format png   # 生成 README.png（1920x108
 cargo run -p md2x-cli -- README.md --format docx  # 生成 README.docx（可编辑 Word 文档，不依赖 Office）
 cargo run -p md2x-cli -- README.md --preview      # 生成 PDF 并用默认应用打开
 cargo run -p md2x-cli -- README.md --format html --template my-theme/  # 指定模板包目录
+cargo run -p md2x-cli -- README.md --format html --template my-theme/ --var accent=#e11d48  # 覆盖模版变量
 ```
 
 ### 全局安装（推荐）
@@ -62,7 +63,7 @@ cd .. && cargo run -p md2x-gui
 - **单文件预览**：打开 / 拖入 `.md` 文件，HTML 即时预览，可导出 PDF、HTML、DOCX
 - **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
 - **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
-- **HTML 模板**：预览与导出使用同一套模板。模板以「目录包」形式组织，放入模板目录（设置 → 导出 → 打开模板目录）后自动扫描加载，卡片式选择并记住所选模版；CLI 用 `--template <目录|文件>` 指定
+- **HTML 模板**：预览与导出使用同一套模板。模板以「目录包」形式组织，放入模板目录（设置 → 导出 → 打开模板目录）后自动扫描加载，卡片式选择并记住所选模版；模版可声明可调变量（配色/字号/字体），设置面板直接改、即时预览；CLI 用 `--template <目录|文件>` 指定，`--var key=value` 覆盖变量
 - **外部图表引擎**：```d2 / ```dot / ```graphviz 代码块由外部 CLI（[D2](https://d2lang.com) / [Graphviz](https://graphviz.org)）在转换期烘焙为内嵌 SVG，设置面板可查看安装状态，装上即用；未安装时保留代码块不报错
 - **默认打开程序**：设置中一键把 `.md` 关联到 md2x（Windows 写注册表、macOS 写 LaunchServices、Linux 使用 xdg-mime），双击 Markdown 文件即可用 md2x 打开
 
@@ -123,11 +124,39 @@ cd .. && cargo run -p md2x-gui
 | `{{SKILL_METADATA}}` | | SKILL.md 元数据卡片 |
 | `{{THEME_LOCK}}` | | 主题档位（auto/light/dark） |
 | `{{WIDTH_VARS}}` | | 全宽模式 CSS |
+| `{{VARS_CSS}}` | | 用户自定义变量的覆盖样式（没改过变量时为空） |
+| `{{VAR_大写KEY}}` | | 某变量的当前值直填（如 `{{VAR_ACCENT}}`） |
 | `{{GITHUB_MD_CSS}}` 等 | | 内置样式与脚本，按需取用 |
 
+#### 可调变量（配色 / 字号 / 字体）
+
+模版可在 `template.json` 里声明 `vars`，设置面板就会在模版卡片下方生成对应控件，
+用户改完即时预览、导出同效，取值按模版 id 记在本机（应用数据目录，不在模版目录里）：
+
+```json
+{
+  "vars": {
+    "accent": { "label": "主色", "default": "#2f6feb", "type": "color", "hint": "标题与链接的强调色" },
+    "doc_font_size": "15.5px"
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| key | 只能是 `[a-z0-9_]`，同时决定 CSS 变量名与占位符：`doc_font_size` → `--doc-font-size` / `{{VAR_DOC_FONT_SIZE}}` |
+| `type` | `color`（取色器）或省略 / `text`（文本框） |
+| `default` | 默认值；值写不写字符串形式都行（`"accent": "#2f6feb"` 是简写） |
+| `hint` | 控件下方的一行说明，可省略 |
+
+样式里只要在 `<head>` 末尾放一个 `<style>{{VARS_CSS}}</style>`，用户改过的项就会自动追加成
+`:root` / `html[data-theme="dark"]` 的覆盖声明，模版自己的 CSS 照常写 `var(--accent)` 即可；
+需要非 CSS 场景（署名、标题后缀）时用 `{{VAR_大写KEY}}` 直填。没有改动时两者都为空，
+导出的 HTML 与手写的完全一致。颜色值渲染前会校验，非法值回落默认。
+CLI 侧用 `--var accent=#e11d48 --var doc_font_size=18px` 覆盖。
+
 模板自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联。
-模板目录内没有任何模板时，应用会自动生成 `sample/` 示例包（`templates/sample/` 亦随仓库提供），
-可直接参照它改写。首次打开模板目录还会生成一份说明 README。
+首次打开模板目录还会生成一份说明 README，写明包结构与占位符契约。
 
 ## 工作流
 

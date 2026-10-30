@@ -39,6 +39,11 @@ struct Cli {
     /// template is used.
     #[arg(long, value_name = "FILE|DIR")]
     template: Option<String>,
+
+    /// Override a template variable, e.g. `--var accent=#e11d48 --var font_size=18px`.
+    /// Keys are declared in the template's template.json; unknown keys are ignored.
+    #[arg(long = "var", value_name = "KEY=VALUE")]
+    vars: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -57,7 +62,10 @@ fn run() -> Result<(), error::MpeError> {
     // CLI 用户明确表达了意图，静默回退会产出非预期结果）。
     // 路径既可是模版包目录（含 template.html），也可是单个 HTML 文件。
     let tpl = match &cli.template {
-        Some(p) => Some(template::HtmlTemplate::from_path(Path::new(p))?),
+        Some(p) => {
+            let t = template::HtmlTemplate::from_path(Path::new(p))?;
+            Some(t.with_var_overrides(&parse_vars(&cli.vars)))
+        }
         None => None,
     };
 
@@ -205,6 +213,23 @@ fn run() -> Result<(), error::MpeError> {
     }
 
     Ok(())
+}
+
+/// 解析 `--var key=value`。
+///
+/// 不是 `key=value` 形状的参数直接丢弃：变量只是微调外观，
+/// 为拼错一个参数让整条转换失败并不划算（取值合法性由核心库兜底）。
+fn parse_vars(raw: &[String]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for item in raw {
+        if let Some((k, v)) = item.split_once('=') {
+            let k = k.trim();
+            if !k.is_empty() {
+                out.insert(k.to_string(), v.trim().to_string());
+            }
+        }
+    }
+    out
 }
 
 fn main() {

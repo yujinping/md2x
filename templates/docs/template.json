@@ -3,5 +3,23 @@
   "description": "自带模版：左侧固定目录、右侧正文，滚动高亮当前章节，适合手册与说明文档",
   "version": "1.0.0",
   "author": "md2x",
-  "preview": "preview.svg"
+  "preview": "preview.svg",
+  "vars": {
+    "accent": {
+      "label": "主色",
+      "default": "#2f6feb",
+      "type": "color",
+      "hint": "当前章节高亮、链接与品牌标记"
+    },
+    "doc_font_size": {
+      "label": "正文字号",
+      "default": "15.5px",
+      "hint": "带单位，如 15.5px / 17px"
+    },
+    "content_max_width": {
+      "label": "正文宽度",
+      "default": "780px",
+      "hint": "单栏阅读宽度；全宽模式自动放开"
+    }
+  }
 }

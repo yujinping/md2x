@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -49,6 +49,188 @@ pub struct TemplateManifest {
     pub author: Option<String>,
     /// 缩略图文件名（相对模版目录）；缺省按 [`PREVIEW_NAMES`] 约定探测
     pub preview: Option<String>,
+    /// 可调变量声明：key → 取值声明。
+    ///
+    /// 用 [`BTreeMap`] 而非 `HashMap` 是为了顺序稳定：设置面板按 key 排序渲染控件，
+    /// 每次打开顺序一致，用户不会觉得控件在乱跳。
+    pub vars: BTreeMap<String, TemplateVarDef>,
+}
+
+/// 变量声明的两种写法（均合法，短写只为省事）。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum TemplateVarDef {
+    /// 简写：`"accent": "#2f6feb"` 只给默认值，标签取 key、控件为文本框
+    Plain(String),
+    /// 完整写法：`{"label": "主色", "default": "#2f6feb", "type": "color", "hint": "…"}`
+    Full(TemplateVarFull),
+}
+
+/// 变量声明的完整写法；所有字段可缺省。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TemplateVarFull {
+    /// 控件标签，缺省取 key
+    pub label: Option<String>,
+    /// 默认值
+    #[serde(rename = "default")]
+    pub default_value: Option<String>,
+    /// 控件形态：`color` / `text`，缺省 `text`（JSON 里写作 `type`）
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    /// 一行说明，展示在控件下方
+    pub hint: Option<String>,
+}
+
+/// 变量控件形态。
+///
+/// 只保留两种：取色器与文本框。字号、字体栈、间距都能用文本框表达，
+/// 再多形态就得引入校验与单位换算，收益远不及复杂度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TemplateVarKind {
+    /// 普通文本（字号、字体栈、宽度等自由取值）
+    #[default]
+    Text,
+    /// 颜色：前端给取色器，渲染前校验是否为合法 CSS 颜色
+    Color,
+}
+
+impl TemplateVarKind {
+    /// 传给前端的形态名
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TemplateVarKind::Color => "color",
+            TemplateVarKind::Text => "text",
+        }
+    }
+}
+
+/// 模版声明的单个可调变量。
+#[derive(Debug, Clone)]
+pub struct TemplateVar {
+    /// 变量 key（小写，仅 `[a-z0-9_]`）：同时决定占位符与 CSS 变量名
+    pub key: String,
+    /// 控件标签
+    pub label: String,
+    /// 默认值（已被 [`sanitize_var_value`] 清洗）
+    pub default: String,
+    /// 控件形态
+    pub kind: TemplateVarKind,
+    /// 一行说明
+    pub hint: String,
+}
+
+impl TemplateVar {
+    /// 直接替换用的占位符：`{{VAR_ACCENT}}`
+    pub fn placeholder(&self) -> String {
+        format!("{{{{VAR_{}}}}}", self.key.to_ascii_uppercase())
+    }
+
+    /// 自动注入时使用的 CSS 自定义属性名：`font_size` → `--font-size`
+    pub fn css_name(&self) -> String {
+        format!("--{}", self.key.replace('_', "-"))
+    }
+}
+
+/// 一份模版最多声明多少个变量。
+///
+/// 上限只为挡住「清单写错把几百个键灌进设置面板」这类事故，
+/// 正常模版远远用不到。
+const MAX_TEMPLATE_VARS: usize = 24;
+
+/// 变量取值长度上限：够放字体栈与 `rgb()`，又不至于把 CSS 撑爆
+const MAX_VAR_VALUE_CHARS: usize = 120;
+
+/// 变量 key 是否合法：必须能同时安全地生成 `{{VAR_X}}` 与 `--x`。
+fn is_valid_var_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 32
+        && key
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic() || c == '_')
+            .unwrap_or(false)
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 清洗变量取值。
+///
+/// 取值最终会落进 CSS 声明（或模版里的任意文本位置），因此只挡能打破
+/// 声明/标签/引号的字符；颜色、字号、字体栈都用不到它们，误伤面为零。
+pub fn sanitize_var_value(raw: &str) -> String {
+    let s: String = raw
+        .chars()
+        .filter(|c| !c.is_control())
+        .filter(|c| !matches!(c, '<' | '>' | '{' | '}' | ';' | '"' | '\'' | '\\' | '`'))
+        .take(MAX_VAR_VALUE_CHARS)
+        .collect();
+    s.trim().to_string()
+}
+
+/// 是否为可接受的 CSS 颜色字面量。
+///
+/// 只做形状判断，不校验色值语义：目的是挡住把 `banana;` 之类
+/// 塞进取色器（前端被绕过时）导致整段样式失效。
+pub fn is_css_color(v: &str) -> bool {
+    let s = v.trim();
+    if s.is_empty() {
+        return false;
+    }
+    if let Some(hex) = s.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    let lower = s.to_ascii_lowercase();
+    for f in ["rgb(", "rgba(", "hsl(", "hsla("] {
+        if let Some(rest) = lower.strip_prefix(f) {
+            return rest.ends_with(')')
+                && rest
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%' | ' ' | ')'));
+        }
+    }
+    // 具名颜色（red / transparent / currentcolor …）
+    s.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// 把清单里的变量声明归一化为渲染用的列表。
+///
+/// 非法 key（含 `-`、空格、非 ASCII 等）直接丢弃：它们无法安全地生成
+/// CSS 变量名与占位符，留着只会得到「设置了却没生效」的困惑。
+fn normalize_vars(raw: BTreeMap<String, TemplateVarDef>) -> Vec<TemplateVar> {
+    let mut out: Vec<TemplateVar> = Vec::new();
+    for (key, def) in raw {
+        if out.len() >= MAX_TEMPLATE_VARS {
+            break;
+        }
+        let key = key.trim().to_ascii_lowercase();
+        if !is_valid_var_key(&key) || out.iter().any(|v| v.key == key) {
+            continue;
+        }
+        let (label, default, kind, hint) = match def {
+            TemplateVarDef::Plain(v) => (None, v, None, None),
+            TemplateVarDef::Full(f) => (
+                f.label,
+                f.default_value.unwrap_or_default(),
+                f.kind,
+                f.hint,
+            ),
+        };
+        let kind = match kind.as_deref().map(str::trim) {
+            Some(k) if k.eq_ignore_ascii_case("color") => TemplateVarKind::Color,
+            _ => TemplateVarKind::Text,
+        };
+        let default = sanitize_var_value(&default);
+        out.push(TemplateVar {
+            label: label
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| key.clone()),
+            default,
+            kind,
+            hint: hint.unwrap_or_default().trim().to_string(),
+            key,
+        });
+    }
+    out
 }
 
 /// 一个可渲染的 HTML 模板：完整 HTML 文档，内含占位符（{{BODY}}、{{TITLE}} 等）。
@@ -64,6 +246,10 @@ pub struct HtmlTemplate {
     pub source: String,
     /// 模板 HTML 全文
     html: String,
+    /// 模版声明的可调变量（内置模版为空）
+    vars: Vec<TemplateVar>,
+    /// 用户覆盖值：只保存「确实偏离默认值」的项，故空表 = 全部走默认
+    overrides: HashMap<String, String>,
 }
 
 impl HtmlTemplate {
@@ -73,6 +259,8 @@ impl HtmlTemplate {
             id: BUILTIN_TEMPLATE_ID.to_string(),
             source: "builtin".to_string(),
             html: include_str!("../../../templates/mpe.html").to_string(),
+            vars: Vec::new(),
+            overrides: HashMap::new(),
         }
     }
 
@@ -110,16 +298,114 @@ impl HtmlTemplate {
                 .unwrap_or("external")
         }
         .to_string();
+        // 变量只在模版包形态下有意义（清单与入口同级）；旧式单文件模版没有清单位置
+        let vars = if is_pkg_entry {
+            path.parent()
+                .and_then(read_manifest)
+                .map(|m| normalize_vars(m.vars))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Ok(HtmlTemplate {
             id,
             source: path.to_string_lossy().to_string(),
             html,
+            vars,
+            overrides: HashMap::new(),
         })
     }
 
     /// 模板 HTML 全文
     pub fn as_str(&self) -> &str {
         &self.html
+    }
+
+    /// 模版声明的可调变量（按 key 排序，顺序稳定）
+    pub fn vars(&self) -> &[TemplateVar] {
+        &self.vars
+    }
+
+    /// 用用户保存的取值覆盖默认值。
+    ///
+    /// 三道过滤，都是为了「宁可显示默认样子，也不要显示坏样子」：
+    /// - 未声明的 key 忽略（清单改过、存档过期都会出现）
+    /// - 空值 / 与默认值相同 → 视为没覆盖（删存档即回默认）
+    /// - 颜色变量的取值必须像颜色，否则回退默认
+    pub fn with_var_overrides(mut self, values: &HashMap<String, String>) -> Self {
+        for v in &self.vars {
+            let Some(raw) = values.get(&v.key) else {
+                continue;
+            };
+            let val = sanitize_var_value(raw);
+            if val.is_empty() || val == v.default {
+                continue;
+            }
+            if v.kind == TemplateVarKind::Color && !is_css_color(&val) {
+                continue;
+            }
+            self.overrides.insert(v.key.clone(), val);
+        }
+        self
+    }
+
+    /// 用户覆盖值（仅含「确实改动过」的项）；调用方用于回写存档。
+    pub fn var_overrides(&self) -> &HashMap<String, String> {
+        &self.overrides
+    }
+
+    /// 变量的实际生效值：覆盖值优先，否则默认值。
+    pub fn var_value(&self, key: &str) -> &str {
+        if let Some(v) = self.overrides.get(key) {
+            return v;
+        }
+        self.vars
+            .iter()
+            .find(|v| v.key == key)
+            .map(|v| v.default.as_str())
+            .unwrap_or("")
+    }
+
+    /// 渲染缓存键：模版 id + 变量取值。
+    ///
+    /// 换模版要重渲染是显然的；同一模版改了配色同样必须失效，
+    /// 否则预览会停在旧颜色上，用户以为设置没生效。
+    pub fn cache_key(&self) -> String {
+        if self.overrides.is_empty() {
+            return self.id.clone();
+        }
+        let mut pairs: Vec<(&String, &String)> = self.overrides.iter().collect();
+        pairs.sort();
+        let mut s = self.id.clone();
+        for (k, v) in pairs {
+            s.push('|');
+            s.push_str(k);
+            s.push('=');
+            s.push_str(v);
+        }
+        s
+    }
+
+    /// 自动注入的变量覆盖样式。
+    ///
+    /// 只输出「用户确实改过」的项，因此没改过的模版渲染结果与手写 HTML
+    /// 完全一致：不会把深色档位调过的配色覆盖成浅色档位的值。
+    /// 深色档位一并覆盖——用户显式指定了配色，就不该在深色下被模版自带值顶回去。
+    fn vars_css(&self) -> String {
+        let mut decl = String::new();
+        for v in &self.vars {
+            if let Some(val) = self.overrides.get(&v.key) {
+                decl.push_str(&format!("\n  {}: {};", v.css_name(), val));
+            }
+        }
+        if decl.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n/* 用户自定义变量：设置 → 导出 → 模版变量 */\n\
+             :root {{{decl}\n}}\n\
+             html[data-theme=\"dark\"] {{{decl}\n}}\n"
+        )
     }
 }
 
@@ -149,6 +435,8 @@ pub struct TemplateEntry {
     pub html_path: PathBuf,
     /// 缩略图路径；无缩略图时为 None，由前端渲染占位图
     pub preview: Option<PathBuf>,
+    /// 模版声明的可调变量；空表示该模版没有可调项
+    pub vars: Vec<TemplateVar>,
 }
 
 /// 读取模版包目录；`template.html` 缺失或不合格时返回 None（不进入列表）。
@@ -186,6 +474,7 @@ fn read_package(dir: &Path) -> Option<TemplateEntry> {
         packaged: true,
         html_path,
         preview,
+        vars: normalize_vars(manifest.vars),
     })
 }
 
@@ -219,6 +508,7 @@ fn read_flat(path: &Path) -> Option<TemplateEntry> {
         packaged: false,
         html_path: path.to_path_buf(),
         preview: None,
+        vars: Vec::new(),
     })
 }
 
@@ -370,7 +660,7 @@ pub fn render_aggregate_html_with(
     let (items, body_fixed) = inject_heading_ids(body, "");
     let print_toc = crate::print_toc::render_print_toc(&items);
     fill_template(
-        tpl.as_str(),
+        tpl,
         body_fixed,
         title,
         "",
@@ -416,7 +706,7 @@ pub fn render_html_with(
         .unwrap_or_default();
     let print_toc = crate::print_toc::render_print_toc(&items);
     fill_template(
-        tpl.as_str(),
+        tpl,
         body_fixed,
         title,
         &toc_html,
@@ -432,7 +722,7 @@ pub fn render_html_with(
 // 参数对应模板的各占位符，均为独立语义，强行打包成结构体反而降低可读性
 #[allow(clippy::too_many_arguments)]
 fn fill_template(
-    template: &str,
+    tpl: &HtmlTemplate,
     body_fixed: String,
     title: &str,
     toc_html: &str,
@@ -475,7 +765,8 @@ fn fill_template(
 
     // {{DOC_TREE}} 必须先于 {{BODY}} 替换：正文里若出现同名占位符字面量，
     // 先替换文档树可避免它被后续步骤当作待填占位符处理。
-    template
+    let mut out = tpl
+        .as_str()
         .replace("{{TITLE}}", title)
         .replace("{{GITHUB_MD_CSS}}", github_css)
         .replace("{{ATOM_ONE_DARK_CSS}}", atom_css)
@@ -489,7 +780,19 @@ fn fill_template(
         .replace("{{DOC_TREE}}", doc_tree)
         // 打印目录页：仅 @media print 下可见，屏幕浏览时 display:none
         .replace("{{PRINT_TOC}}", print_toc)
-        .replace("{{BODY}}", &body_fixed)
+        // 用户自定义变量：未改过任何变量时为空串，渲染结果与原始模版一致
+        .replace("{{VARS_CSS}}", &tpl.vars_css());
+
+    // {{VAR_XXX}} 直接替换也放在正文注入之前：正文里出现同名文本来自用户 Markdown，
+    // 那是要原样展示的内容，不该被当成占位符吃掉。
+    for v in tpl.vars() {
+        let ph = v.placeholder();
+        if out.contains(&ph) {
+            out = out.replace(&ph, tpl.var_value(&v.key));
+        }
+    }
+
+    out.replace("{{BODY}}", &body_fixed)
         // 聚合页给 body 加标记，供 CSS 决定是否显示文档树区块
         .replace(
             "<body>",
@@ -1220,11 +1523,144 @@ mod tests {
             source: "test".to_string(),
             html: "<html><head><title>{{TITLE}}</title></head><body>{{BODY}}</body></html>"
                 .to_string(),
+            vars: Vec::new(),
+            overrides: HashMap::new(),
         };
         let out = render_html_with(&tpl, "<h2>标题</h2><p>正文</p>", "文档", None, false, Theme::Auto);
         assert!(out.contains("<title>文档</title>"));
         assert!(out.contains("正文"));
         assert!(!out.contains("{{BODY}}"), "渲染后不应残留 BODY 占位符");
         assert!(out.contains("id=\"标题\""), "TOC 锚点注入与模板无关，应照常生效");
+    }
+
+    // ===== 模版变量 =====
+
+    /// 造一个带变量声明的模版包，返回目录
+    fn var_pkg(name: &str, manifest: &str, html: &str) -> PathBuf {
+        let dir = pkg_root(name).join("theme");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(TEMPLATE_MANIFEST), manifest).unwrap();
+        std::fs::write(dir.join(TEMPLATE_HTML), html).unwrap();
+        dir
+    }
+
+    #[test]
+    fn 清单变量支持简写与完整写法() {
+        let dir = var_pkg(
+            "var-parse",
+            r##"{"vars":{
+                "accent":{"label":"主色","default":"#2f6feb","type":"color","hint":"整站主色"},
+                "font_size":"17px",
+                "Bad-Key":"x"
+            }}"##,
+            "<html><body>{{BODY}}</body></html>",
+        );
+        let tpl = HtmlTemplate::from_path(&dir).unwrap();
+        let vars = tpl.vars();
+        assert_eq!(vars.len(), 2, "非法 key（含短横线）应被丢弃");
+        assert_eq!(vars[0].key, "accent");
+        assert_eq!(vars[0].kind, TemplateVarKind::Color);
+        assert_eq!(vars[0].label, "主色");
+        assert_eq!(vars[0].hint, "整站主色");
+        // 简写只给默认值，标签退化为 key，形态为文本
+        assert_eq!(vars[1].key, "font_size");
+        assert_eq!(vars[1].default, "17px");
+        assert_eq!(vars[1].label, "font_size");
+        assert_eq!(vars[1].kind, TemplateVarKind::Text);
+    }
+
+    #[test]
+    fn 变量覆盖生成注入样式并遵守默认值() {
+        let dir = var_pkg(
+            "var-css",
+            r##"{"vars":{"accent":{"default":"#2f6feb","type":"color"},"font_size":"16px"}}"##,
+            "<html><head><style>:root{--accent:#2f6feb}</style><style>{{VARS_CSS}}</style></head>\
+             <body>{{BODY}}</body></html>",
+        );
+        let tpl = HtmlTemplate::from_path(&dir).unwrap();
+
+        // 没有任何覆盖：{{VARS_CSS}} 空，渲染结果与手写 HTML 一致
+        let plain = render_html_with(&tpl, "<p>x</p>", "t", None, false, Theme::Auto);
+        assert!(plain.contains("<style></style>"), "未覆盖时不应注入任何样式");
+
+        let mut ov = HashMap::new();
+        ov.insert("accent".to_string(), "#e11d48".to_string());
+        ov.insert("font_size".to_string(), "18px".to_string());
+        let tpl = tpl.with_var_overrides(&ov);
+        let out = render_html_with(&tpl, "<p>x</p>", "t", None, false, Theme::Auto);
+        assert!(out.contains("--accent: #e11d48;"), "自定义主色应注入");
+        assert!(out.contains("--font-size: 18px;"), "下划线应转成 CSS 连字符");
+        assert!(
+            out.contains("html[data-theme=\"dark\"]"),
+            "深色档位同样要覆盖，否则深色下会被模版自带值顶回去"
+        );
+    }
+
+    #[test]
+    fn 变量直接占位符按key大写替换() {
+        let dir = var_pkg(
+            "var-direct",
+            r##"{"vars":{"brand":{"label":"品牌名","default":"md2x"}}}"##,
+            "<html><body><span>{{VAR_BRAND}}</span>{{BODY}}</body></html>",
+        );
+        let mut ov = HashMap::new();
+        ov.insert("brand".to_string(), "内部文档".to_string());
+        let tpl = HtmlTemplate::from_path(&dir).unwrap().with_var_overrides(&ov);
+        let out = render_html_with(&tpl, "<p>x</p>", "t", None, false, Theme::Auto);
+        assert!(out.contains("<span>内部文档</span>"));
+        assert!(!out.contains("{{VAR_BRAND}}"));
+    }
+
+    #[test]
+    fn 变量取值挡注入且非法颜色回退默认() {
+        assert_eq!(sanitize_var_value("  16px  "), "16px");
+        // 能打破声明/标签的字符一律剔除，正常的字体栈与 rgb() 放行
+        assert_eq!(sanitize_var_value("a;b{}<c>\"d\""), "abcd");
+        assert_eq!(sanitize_var_value("Georgia, serif"), "Georgia, serif");
+        assert_eq!(sanitize_var_value("rgb(1, 2, 3)"), "rgb(1, 2, 3)");
+
+        let dir = var_pkg(
+            "var-inject",
+            r##"{"vars":{"accent":{"default":"#2f6feb","type":"color"}}}"##,
+            "<html><head><style>{{VARS_CSS}}</style></head><body>{{BODY}}</body></html>",
+        );
+        let mut ov = HashMap::new();
+        ov.insert("accent".to_string(), "12px".to_string());
+        let tpl = HtmlTemplate::from_path(&dir).unwrap().with_var_overrides(&ov);
+        assert!(
+            tpl.cache_key() == "theme",
+            "非法颜色视为未覆盖，缓存键应仍是纯 id"
+        );
+    }
+
+    #[test]
+    fn 缓存键区分变量取值() {
+        let dir = var_pkg(
+            "var-cache",
+            r##"{"vars":{"accent":{"default":"#2f6feb","type":"color"}}}"##,
+            "<html><head><style>{{VARS_CSS}}</style></head><body>{{BODY}}</body></html>",
+        );
+        let base = HtmlTemplate::from_path(&dir).unwrap();
+        let mut a = HashMap::new();
+        a.insert("accent".to_string(), "#e11d48".to_string());
+        let mut b = HashMap::new();
+        b.insert("accent".to_string(), "#16a34a".to_string());
+        let ka = base.clone().with_var_overrides(&a).cache_key();
+        let kb = base.clone().with_var_overrides(&b).cache_key();
+        assert_ne!(ka, kb, "改了配色必须换缓存键，否则预览停在旧颜色");
+        assert_eq!(ka, base.clone().with_var_overrides(&a).cache_key(), "同值应同键");
+    }
+
+    #[test]
+    fn 正文里的变量占位符不被替换() {
+        // 用户 Markdown 里写的 {{VAR_X}} 是要展示的文本，不能被当成占位符吃掉
+        let dir = var_pkg(
+            "var-body",
+            r##"{"vars":{"accent":{"default":"#2f6feb"}}}"##,
+            "<html><body>{{BODY}}</body></html>",
+        );
+        let tpl = HtmlTemplate::from_path(&dir).unwrap();
+        let out = render_html_with(&tpl, "<p>{{VAR_ACCENT}}</p>", "t", None, false, Theme::Auto);
+        assert!(out.contains("<p>{{VAR_ACCENT}}</p>"));
     }
 }

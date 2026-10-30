@@ -43,6 +43,15 @@ export const useSettingsStore = defineStore('settings', () => {
   // 主题变更订阅者：预览需要据此重新渲染，保证「设置里切的 = 预览里看到的」
   const themeListeners = new Set()
 
+  // 模版变量版本号：值本身不重要，只用作「变量改过了」的信号。
+  // 变量的真正存档在后端（预览/PDF/导出都在后端读同一份），
+  // 前端只需在保存成功后把版本号 +1，预览据此重新渲染。
+  const templateVarsRev = ref(0)
+
+  function bumpTemplateVars() {
+    templateVarsRev.value += 1
+  }
+
   function applyTheme(val) {
     document.documentElement.classList.toggle('light', val === 'light')
   }
@@ -123,6 +132,8 @@ export const useSettingsStore = defineStore('settings', () => {
     fullWidth,
     viewMode,
     templateId,
+    templateVarsRev,
+    bumpTemplateVars,
     toolbarVisible,
     treeVisible,
     setTheme,

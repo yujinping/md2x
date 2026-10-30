@@ -40,6 +40,9 @@
     --paper: #fffdf8;
     --border: #d8d2c6;
     --accent: #8a3324;
+    --doc-font-size: 16px;
+    --font-family: "Songti SC", "STSong", "SimSun", "Source Han Serif SC",
+      "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
     --code-bg: #f4f0e8;
     --sheet-width: 820px;
   }
@@ -57,8 +60,7 @@
     margin: 0;
     background: var(--bg);
     color: var(--fg);
-    font-family: "Songti SC", "STSong", "SimSun", "Source Han Serif SC",
-      "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
+    font-family: var(--font-family);
     -webkit-font-smoothing: antialiased;
   }
 
@@ -110,7 +112,7 @@
 
   /* ===== 正文 ===== */
   .markdown-body {
-    font-size: 16px;
+    font-size: var(--doc-font-size);
     line-height: 1.9;
     color: var(--fg);
     background: transparent;
@@ -193,9 +195,11 @@
   @media (max-width: 860px) {
     .sheet { padding: 36px 22px 56px; box-shadow: none; }
     .head h1.doc-title { font-size: 22px; }
-    .markdown-body { font-size: 15.5px; }
+    .markdown-body { font-size: calc(var(--doc-font-size) - 0.5px); }
   }
 </style>
+<!-- 用户自定义变量（设置 → 导出 → 模版变量）：未改动任何变量时下面的样式块为空，页面与上面写的完全一致 -->
+<style>{{VARS_CSS}}</style>
 </head>
 <body>
   <main class="sheet">

@@ -4,6 +4,7 @@ use md2x_core::converter;
 use md2x_core::error::MpeError;
 use md2x_core::{ext_diagram, template};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -45,7 +46,8 @@ fn templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// 首次打开模板目录时写入的说明文件，向模板作者说明模版包约定与占位符契约。
-const TEMPLATES_README: &str = r#"# md2x 模版目录
+// JSON 示例里含 `"#hex"`，会把 r#"…"# 的定界符提前闭合，故用 r##"…"##
+const TEMPLATES_README: &str = r##"# md2x 模版目录
 
 本目录下**每个子目录即一个模版包**，模版列表自动扫描，放入后点「刷新列表」即可选用；
 选中结果会被记住，预览与导出共用同一个模版。
@@ -76,6 +78,42 @@ const TEMPLATES_README: &str = r#"# md2x 模版目录
 `preview.webp` / `preview.svg`；也可用 `template.json` 的 `preview` 字段指定任意相对路径。
 缺失缩略图时列表显示占位图，不影响使用。
 
+## 可调变量（配色 / 字号 / 字体）
+
+在 `template.json` 里声明 `vars`，模版就会在「设置 → 导出」下方多出一组控件，
+用户改完的值保存在本机应用数据目录（不在本目录），预览与导出共用：
+
+```json
+{
+  "vars": {
+    "accent": {
+      "label": "主色",
+      "default": "#2f6feb",
+      "type": "color",
+      "hint": "标题与链接的强调色"
+    },
+    "doc_font_size": "15.5px"
+  }
+}
+```
+
+- `type` 取 `color`（取色器）或省略 / `text`（文本框）；也可整个写成字符串，等于只给默认值
+- key 只能是 `[a-z0-9_]`，它同时决定 CSS 变量名与占位符：
+  key `doc_font_size` → CSS 变量 `--doc-font-size`、占位符 `{{VAR_DOC_FONT_SIZE}}`
+- 要在样式里生效有两种方式，任选：
+
+```html
+<!-- 1. 推荐：在 <head> 末尾放一个空样式块，用户改过的变量会自动追加成
+     :root / html[data-theme="dark"] 的覆盖声明，模版自己的 CSS 用 var() 取值即可 -->
+<style>{{VARS_CSS}}</style>
+
+<!-- 2. 直接文本替换：适合非 CSS 场景（标题后缀、署名等） -->
+<div class="brand">{{VAR_ACCENT}}</div>
+```
+
+没改过任何变量时 `{{VARS_CSS}}` 为空，导出的页面与手写的完全一致。
+颜色值会在渲染前校验，非法值自动回落到默认，不会把样式写坏。
+
 ## 旧式单文件模版
 
 直接放在本目录根下的 `<id>.html` 仍可用（无元数据、无缩略图），但不推荐新模版采用。
@@ -90,6 +128,8 @@ const TEMPLATES_README: &str = r#"# md2x 模版目录
 - `{{SKILL_METADATA}}`：SKILL.md 元数据卡片
 - `{{THEME_LOCK}}`：主题档位（auto/light/dark 字符串）
 - `{{WIDTH_VARS}}`：全宽模式 CSS
+- `{{VARS_CSS}}`：用户自定义变量的覆盖样式（未改过变量时为空）
+- `{{VAR_大写KEY}}`：把某个变量的当前值直接填进来（如 `{{VAR_ACCENT}}`）
 - `{{GITHUB_MD_CSS}}` / `{{ATOM_ONE_DARK_CSS}}` / `{{HIGHLIGHT_JS}}`：内置样式与脚本，按需取用
 
 ## 自带模版（可直接复制修改）
@@ -113,7 +153,7 @@ const TEMPLATES_README: &str = r#"# md2x 模版目录
 
 - 模版需自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联
 - 聚合导出的文档树、主题切换、全宽等交互需模版自行支持
-"#;
+"##;
 
 /// 一份自带模版包：编译进二进制，首次运行写入模版目录，供用户复制后修改。
 ///
@@ -242,7 +282,58 @@ fn ensure_templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(d)
 }
 
+/// 用户自定义模版变量的存档路径：`<app_data_dir>/template-vars.json`。
+///
+/// 刻意放在模版目录之外：模版目录是「作品」，可能是共享/可移植的一份；
+/// 变量取值是「本机偏好」，混在一起会让用户复制模版给别人时把配色偏好也带走。
+fn var_store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录: {e}"))?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("创建应用数据目录失败: {e}"))?;
+    Ok(base.join("template-vars.json"))
+}
+
+/// 读取变量存档：`{ "模版 id": { "变量 key": "取值" } }`。
+///
+/// 读取失败一律当作「没有任何自定义」——存档损坏不该让预览/导出失败，
+/// 只是回到默认外观。
+fn read_var_store(app: &tauri::AppHandle) -> HashMap<String, HashMap<String, String>> {
+    match var_store_path(app) {
+        Ok(p) => read_var_store_file(&p),
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// 写回变量存档（空表也写，便于「重置后」不留残影）。
+fn write_var_store(
+    app: &tauri::AppHandle,
+    store: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), String> {
+    write_var_store_file(&var_store_path(app)?, store)
+}
+
+fn read_var_store_file(p: &Path) -> HashMap<String, HashMap<String, String>> {
+    let Ok(raw) = std::fs::read_to_string(p) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn write_var_store_file(
+    p: &Path,
+    store: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("序列化模版变量失败: {e}"))?;
+    std::fs::write(p, raw).map_err(|e| format!("写入模版变量失败: {e}"))
+}
+
 /// 按前端传入的模板 id 加载模板；目录不可用或 id 失效时回退内置。
+///
+/// 同时把该模版已保存的变量取值穿上——预览、PDF、导出、聚合全都走这里，
+/// 因此自定义配色只需在这一处接一次，不会出现「预览生效、导出没生效」。
 fn load_selected_template(
     app: &tauri::AppHandle,
     template_id: &Option<String>,
@@ -252,7 +343,13 @@ fn load_selected_template(
         return template::HtmlTemplate::builtin();
     }
     match templates_dir(app) {
-        Ok(dir) => template::load_template(&id, &dir),
+        Ok(dir) => {
+            let tpl = template::load_template(&id, &dir);
+            match read_var_store(app).remove(&id) {
+                Some(values) => tpl.with_var_overrides(&values),
+                None => tpl,
+            }
+        }
         Err(_) => template::HtmlTemplate::builtin(),
     }
 }
@@ -279,6 +376,26 @@ struct TemplateInfo {
     preview: String,
     /// 模版入口 HTML 路径（内置为空）
     path: String,
+    /// 可调变量（含当前生效值）；空表示该模版没有可调项
+    vars: Vec<TemplateVarInfo>,
+}
+
+/// 模版变量条目（返回给设置面板渲染控件）
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TemplateVarInfo {
+    /// 变量 key，改动后原样回传
+    key: String,
+    /// 控件标签
+    label: String,
+    /// 控件形态："color" / "text"
+    kind: String,
+    /// 默认值（前端用于占位提示与「重置」）
+    default: String,
+    /// 当前生效值（已含用户覆盖）
+    value: String,
+    /// 一行说明（可能为空）
+    hint: String,
 }
 
 /// 文件树节点（目录/文件），递归描述文件夹内的 Markdown 文件
@@ -716,6 +833,7 @@ pub fn run() {
             is_fullscreen,
             register_default_md_handler,
             list_templates,
+            set_template_vars,
             open_templates_dir,
             duplicate_template,
             check_external_tools,
@@ -1223,7 +1341,7 @@ fn get_html(
         if let Some(ref cached) = *cache {
             if cached.file_mtime == *mtime
                 && cached.full_width == full_width
-                && cached.template_id == tpl.id
+                && cached.template_id == tpl.cache_key()
                 && cached.html_path.exists()
             {
                 return Ok(cached.html_path.to_string_lossy().to_string());
@@ -1263,7 +1381,7 @@ fn get_html(
                 existing.pdf_path = PathBuf::new(); // 清除 PDF 缓存，强制重新生成
                 existing.file_mtime = mtime;
                 existing.full_width = full_width;
-                existing.template_id = tpl.id.clone();
+                existing.template_id = tpl.cache_key();
             }
             None => {
                 *cache = Some(CachedPreview {
@@ -1271,7 +1389,7 @@ fn get_html(
                     pdf_path: PathBuf::new(), // 尚无 PDF
                     html_path: hp.clone(),
                     full_width,
-                    template_id: tpl.id.clone(),
+                    template_id: tpl.cache_key(),
                 });
             }
         }
@@ -1314,7 +1432,7 @@ fn preview_pdf(
         if let Some(ref cached) = *cache {
             if cached.file_mtime == current_mtime
                 && cached.full_width == full_width
-                && cached.template_id == tpl.id
+                && cached.template_id == tpl.cache_key()
                 && cached.pdf_path.exists()
             {
                 let pd =
@@ -1366,7 +1484,7 @@ fn preview_pdf(
             pdf_path: pp.clone(),
             html_path: hp,
             full_width,
-            template_id: tpl.id.clone(),
+            template_id: tpl.cache_key(),
         });
     }
 
@@ -1428,9 +1546,12 @@ fn list_templates(app: tauri::AppHandle) -> Result<Vec<TemplateInfo>, String> {
         packaged: true,
         preview: String::new(),
         path: String::new(),
+        vars: Vec::new(),
     }];
     let dir = ensure_templates_dir(&app)?;
+    let store = read_var_store(&app);
     for e in template::scan_templates(&dir) {
+        let values = store.get(&e.id);
         out.push(TemplateInfo {
             preview: e
                 .preview
@@ -1438,16 +1559,76 @@ fn list_templates(app: tauri::AppHandle) -> Result<Vec<TemplateInfo>, String> {
                 .and_then(template::preview_data_url)
                 .unwrap_or_default(),
             path: e.html_path.to_string_lossy().to_string(),
-            id: e.id,
+            id: e.id.clone(),
             name: e.name,
             description: e.description,
             version: e.version,
             author: e.author,
             builtin: false,
             packaged: e.packaged,
+            vars: var_infos(&e.vars, values),
         });
     }
     Ok(out)
+}
+
+/// 把模版声明的变量与已保存取值合成为前端条目。
+///
+/// 存档里可能残留模版已删掉的 key（作者改了清单），这里以清单为准逐个取值，
+/// 残留项自然被忽略。
+fn var_infos(
+    vars: &[template::TemplateVar],
+    values: Option<&HashMap<String, String>>,
+) -> Vec<TemplateVarInfo> {
+    vars.iter()
+        .map(|v| {
+            let raw = values.and_then(|m| m.get(&v.key)).cloned().unwrap_or_default();
+            let saved = template::sanitize_var_value(&raw);
+            let value = if saved.is_empty() {
+                v.default.clone()
+            } else {
+                saved
+            };
+            TemplateVarInfo {
+                key: v.key.clone(),
+                label: v.label.clone(),
+                kind: v.kind.as_str().to_string(),
+                default: v.default.clone(),
+                value,
+                hint: v.hint.clone(),
+            }
+        })
+        .collect()
+}
+
+/// 保存某个模版的变量取值，返回保存后的生效值。
+///
+/// 前端传整份映射（缺省即回默认），后端按清单声明的变量逐项过滤：
+/// 未声明的 key、与默认值相同的值都不落盘——这样存档里只剩「真正改过的项」，
+/// 模版作者日后调整默认值时，用户没动过的变量能跟着更新。
+#[tauri::command(rename_all = "camelCase")]
+fn set_template_vars(
+    app: tauri::AppHandle,
+    template_id: String,
+    vars: HashMap<String, String>,
+) -> Result<Vec<TemplateVarInfo>, String> {
+    let dir = ensure_templates_dir(&app)?;
+    if !is_safe_template_id(&template_id) {
+        return Err(format!("非法的模版 id: {template_id}"));
+    }
+    let tpl = template::load_template(&template_id, &dir);
+    // 复用渲染侧同一套过滤逻辑，避免「存进去的值」与「渲染用的值」两套规则
+    let tpl = tpl.with_var_overrides(&vars);
+    let kept = tpl.var_overrides().clone();
+
+    let mut store = read_var_store(&app);
+    if kept.is_empty() {
+        store.remove(&template_id);
+    } else {
+        store.insert(template_id, kept.clone());
+    }
+    write_var_store(&app, &store)?;
+    Ok(var_infos(tpl.vars(), Some(&kept)))
 }
 
 /// 打开外置模板目录（不存在则创建，并写入契约说明 README）
@@ -1558,6 +1739,13 @@ fn duplicate_template(app: tauri::AppHandle, id: String) -> Result<String, Strin
     let dst = dir.join(&dst_id);
     copy_dir(&src, &dst).map_err(|e| format!("复制模版失败: {e}"))?;
     name_copy_package(&dst, &id);
+    // 自定义变量一并带过去：复制通常是为了在已调好的配色上继续改版式，
+    // 副本却回落默认配色会让人以为「复制没生效」
+    let mut store = read_var_store(&app);
+    if let Some(vals) = store.get(&id).cloned() {
+        store.insert(dst_id.clone(), vals);
+        let _ = write_var_store(&app, &store);
+    }
     Ok(dst_id)
 }
 
@@ -2485,5 +2673,67 @@ mod tests {
         for bad in ["", ".", "..", "../etc", "a/b", "a\\b", ".hidden"] {
             assert!(!is_safe_template_id(bad), "{bad} 应被拒绝");
         }
+    }
+
+    #[test]
+    fn 变量存档可往返且容忍损坏() {
+        let dir = fresh_dir("var-store");
+        let p = dir.join("template-vars.json");
+
+        // 缺失文件 → 空表（首次运行）
+        assert!(read_var_store_file(&p).is_empty());
+
+        let mut store: HashMap<String, HashMap<String, String>> = HashMap::new();
+        store.insert(
+            "docs".to_string(),
+            HashMap::from([("accent".to_string(), "#e11d48".to_string())]),
+        );
+        write_var_store_file(&p, &store).unwrap();
+        let back = read_var_store_file(&p);
+        assert_eq!(back["docs"]["accent"], "#e11d48", "写入后应能原样读回");
+
+        // 存档损坏 → 当作没有自定义，不能让预览/导出失败
+        std::fs::write(&p, "{ not json").unwrap();
+        assert!(read_var_store_file(&p).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 变量条目以清单为准忽略过期存档() {
+        let vars = vec![
+            template::TemplateVar {
+                key: "accent".to_string(),
+                label: "主色".to_string(),
+                default: "#2f6feb".to_string(),
+                kind: template::TemplateVarKind::Color,
+                hint: String::new(),
+            },
+            template::TemplateVar {
+                key: "doc_font_size".to_string(),
+                label: "正文字号".to_string(),
+                default: "15.5px".to_string(),
+                kind: template::TemplateVarKind::Text,
+                hint: "带单位".to_string(),
+            },
+        ];
+        let saved = HashMap::from([
+            ("accent".to_string(), "#e11d48".to_string()),
+            // 作者已从清单里删掉的 key：存档里还留着，必须忽略而不是显示出来
+            ("removed".to_string(), "x".to_string()),
+            // 空值等于「没改」，应回落到默认值
+            ("doc_font_size".to_string(), "  ".to_string()),
+        ]);
+        let infos = var_infos(&vars, Some(&saved));
+        assert_eq!(infos.len(), 2, "只输出清单声明的变量");
+        assert_eq!(infos[0].key, "accent");
+        assert_eq!(infos[0].value, "#e11d48");
+        assert_eq!(infos[0].kind, "color");
+        assert_eq!(infos[1].value, "15.5px", "空存档应回落到默认值");
+        assert_eq!(infos[1].default, "15.5px");
+
+        // 完全没有存档时全部取默认
+        let plain = var_infos(&vars, None);
+        assert_eq!(plain[0].value, "#2f6feb");
     }
 }

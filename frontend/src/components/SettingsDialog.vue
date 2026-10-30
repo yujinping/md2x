@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
@@ -171,6 +171,84 @@ async function duplicateSelected() {
   } finally {
     copying.value = false
   }
+}
+
+// ===== 模版变量 =====
+// 变量由模版清单声明（颜色 / 文本），取值存档在后端：
+// 预览、PDF、导出、聚合都在后端读同一份，所以这里只管编辑与保存，
+// 保存成功后 bump 版本号让预览重新渲染。
+const varValues = ref({})
+const varSaving = ref(false)
+const varError = ref(false)
+
+const activeTpl = computed(() => templates.value.find(t => t.id === settings.templateId))
+const varDefs = computed(() => activeTpl.value?.vars || [])
+// 有任一项偏离默认值时可「恢复默认」；全默认时按钮置灰，避免无效点击
+const hasVarOverrides = computed(() =>
+  varDefs.value.some(v => (varValues.value[v.key] ?? v.default) !== v.default)
+)
+
+/// 把后端返回的生效值铺进编辑态；保存失败或清单变更后都靠它对齐
+function syncVarValues(list) {
+  const next = {}
+  for (const v of list || []) next[v.key] = v.value
+  varValues.value = next
+}
+
+// 换模版即换变量集合：必须按新模版的声明重建，否则会带着上一个模版的值
+watch(() => settings.templateId, () => {
+  varError.value = false
+  syncVarValues(varDefs.value)
+}, { immediate: true })
+
+// 列表刷新（复制、重新扫描）后同样对齐一次
+watch(templates, () => syncVarValues(varDefs.value))
+
+/// 取色器只接受 #rrggbb：保存值可能来自手写 rgb() 或 3 位简写，需归一化
+function colorOf(v) {
+  const raw = String(varValues.value[v.key] ?? v.default ?? '').trim()
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw.toLowerCase()
+  if (/^#[0-9a-f]{3}$/i.test(raw)) return '#' + raw.slice(1).split('').map(c => c + c).join('').toLowerCase()
+  const dflt = String(v.default || '').trim()
+  if (/^#[0-9a-f]{6}$/i.test(dflt)) return dflt.toLowerCase()
+  if (/^#[0-9a-f]{3}$/i.test(dflt)) return '#' + dflt.slice(1).split('').map(c => c + c).join('').toLowerCase()
+  return '#000000'
+}
+
+async function onVarChange(v, value) {
+  const next = { ...varValues.value, [v.key]: String(value ?? '') }
+  varValues.value = next
+  await saveVars()
+}
+
+/// 保存当前模版的全部变量（整份映射，空值即回默认）
+async function saveVars() {
+  const tpl = activeTpl.value
+  if (!tpl || varSaving.value) return
+  varSaving.value = true
+  varError.value = false
+  try {
+    const updated = await invoke('set_template_vars', {
+      templateId: tpl.id,
+      vars: { ...varValues.value },
+    })
+    // 用后端归一化后的结果回填：非法值会被丢弃并回落到默认，
+    // 界面必须如实反映，否则用户以为改成了却没生效
+    const item = templates.value.find(t => t.id === tpl.id)
+    if (item) item.vars = updated
+    syncVarValues(updated)
+    settings.bumpTemplateVars()
+  } catch (_) {
+    varError.value = true
+  } finally {
+    varSaving.value = false
+  }
+}
+
+/// 恢复默认：清空覆盖后交给后端删除存档
+async function resetVars() {
+  varValues.value = {}
+  await saveVars()
 }
 
 // 内置模版的名称与描述随界面语言变化（后端只给兜底文案）
@@ -525,6 +603,70 @@ async function setDefault() {
                   class="col-span-2 px-3.5 py-6 rounded-xl text-center text-[12px]"
                   :style="{ border: '1.5px dashed var(--border)', color: 'var(--text-dim)' }"
                 >{{ t('templateEmpty', settings.lang) }}</div>
+              </div>
+
+              <!-- 模版变量：清单里声明了 vars 才出现（内置模版与旧式单文件模版没有） -->
+              <div
+                v-if="varDefs.length"
+                class="mt-4 pt-3.5"
+                :style="{ borderTop: '1px solid var(--border)' }"
+              >
+                <div class="flex items-center justify-between gap-2 mb-2.5">
+                  <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">
+                    {{ t('settingsTemplateVars', settings.lang) }}
+                  </div>
+                  <button
+                    class="h-6 px-2 rounded-lg border text-[11px] font-medium"
+                    :style="{
+                      borderColor: 'var(--border)',
+                      color: hasVarOverrides ? 'var(--text)' : 'var(--text-dim)',
+                      background: 'transparent',
+                      cursor: hasVarOverrides ? 'pointer' : 'not-allowed',
+                      opacity: hasVarOverrides ? 1 : 0.45,
+                    }"
+                    :disabled="!hasVarOverrides || varSaving"
+                    @click="resetVars"
+                  >{{ t('btnResetVars', settings.lang) }}</button>
+                </div>
+
+                <div class="flex flex-col gap-2.5">
+                  <div v-for="v in varDefs" :key="v.key">
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="text-[12px] w-[64px] flex-shrink-0 truncate"
+                        :style="{ color: 'var(--text)' }"
+                        :title="v.key"
+                      >{{ v.label }}</span>
+                      <!-- 颜色：取色器 + 当前色值，两者同步 -->
+                      <template v-if="v.kind === 'color'">
+                        <input
+                          type="color"
+                          class="w-8 h-7 rounded-md cursor-pointer flex-shrink-0 p-0"
+                          :style="{ border: '1px solid var(--border)', background: 'transparent' }"
+                          :value="colorOf(v)"
+                          @change="onVarChange(v, $event.target.value)"
+                        />
+                        <code class="text-[11px] font-mono" :style="{ color: 'var(--text-dim)' }">{{ colorOf(v) }}</code>
+                      </template>
+                      <!-- 文本：字号、字体栈、宽度等自由取值 -->
+                      <input
+                        v-else
+                        type="text"
+                        class="flex-1 min-w-0 h-7 px-2.5 rounded-lg text-[12px] font-mono outline-none"
+                        :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                        :value="varValues[v.key] ?? v.default"
+                        :placeholder="v.default"
+                        @change="onVarChange(v, $event.target.value)"
+                      />
+                    </div>
+                    <p
+                      v-if="v.hint"
+                      class="mt-1 text-[10.5px] leading-relaxed"
+                      :style="{ color: 'var(--text-dim)', paddingLeft: '72px' }"
+                    >{{ v.hint }}</p>
+                  </div>
+                </div>
+                <p v-if="varError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateVarsFail', settings.lang) }}</p>
               </div>
 
               <p class="mt-3 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>

@@ -36,6 +36,7 @@
     --bg: #ffffff;
     --border: #d1d9e0;
     --accent: #0969da;
+    --doc-font-size: 15.5px;
     --code-bg: #f6f8fa;
   }
   html[data-theme="dark"] {
@@ -99,7 +100,7 @@
   /* ===== 正文：把 github-markdown-css 依赖的变量指到本模版的档位上 =====
      否则它会按系统深浅自行取色，与导出时固化的档位不一致（暗系统 + 浅模版会变成浅字白底） */
   .markdown-body {
-    font-size: 15.5px;
+    font-size: var(--doc-font-size);
     line-height: 1.75;
     color: var(--fg);
     background: transparent;
@@ -135,6 +136,8 @@
     .markdown-body a { color: inherit; text-decoration: underline; }
   }
 </style>
+<!-- 用户自定义变量（设置 → 导出 → 模版变量）：未改动任何变量时下面的样式块为空，页面与上面写的完全一致 -->
+<style>{{VARS_CSS}}</style>
 </head>
 <body>
   <main class="page">
