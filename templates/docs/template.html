@@ -128,6 +128,21 @@
   /* 文档没有任何标题时，整块目录（含标签）隐藏 */
   .sidebar:has(.nav ul:empty) .nav-label { display: none; }
 
+  /* ===== 未打包文件的提示 =====
+     单文件产物带不走 pdf/xlsx 等附件，Rust 侧把这些链接换成
+     `<span class="ext-missing">原文(相对路径)</span>`，此处给出可辨认样式 */
+  .ext-missing {
+    color: var(--fg-dim);
+    cursor: default;
+    border-bottom: 1px dashed var(--border);
+  }
+  .ext-missing .ext-missing-path {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.9em;
+    margin-left: 2px;
+    opacity: 0.85;
+  }
+
   /* ===== 右侧正文 ===== */
   .main-content {
     margin-left: 272px;

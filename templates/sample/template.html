@@ -97,6 +97,23 @@
   /* 本模版不启用逐级折叠：目录整棵树静态展开，打印更可读 */
   .toc-box .toc-toggle { display: none; }
 
+  /* ===== 未打包文件的提示 =====
+     单文件产物带不走 pdf/xlsx 等附件，Rust 侧把这些链接换成
+     `<span class="ext-missing">原文(相对路径)</span>`。
+     模版必须给出可辨认的样式，否则它会退化成一串普通文字，
+     读者既不知道那原本是个链接，也不知道缺了哪个文件。 */
+  .ext-missing {
+    color: var(--fg-dim);
+    cursor: default;
+    border-bottom: 1px dashed var(--border);
+  }
+  .ext-missing .ext-missing-path {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.9em;
+    margin-left: 2px;
+    opacity: 0.85;
+  }
+
   /* ===== 正文：把 github-markdown-css 依赖的变量指到本模版的档位上 =====
      否则它会按系统深浅自行取色，与导出时固化的档位不一致（暗系统 + 浅模版会变成浅字白底） */
   .markdown-body {
