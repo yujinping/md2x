@@ -1,3 +1,18 @@
+## [unreleased]
+
+### 🚀 Features
+
+- *(export)* [**breaking**] 支持自定义导出顺序与排除项
+- *(template)* 四套模版补上未打包文件的提示样式
+- *(gui)* 文件树支持拖动排序与右键排除
+
+### 📚 Documentation
+
+- 将 v1.2.0 变更归入版本段落
+
+### 🧪 Testing
+
+- *(cdp)* 测试函数名改用 snake_case，clippy -D warnings 通过
 ## [1.2.0] - 2026-10-30
 
 ### 🚀 Features
@@ -18,7 +33,6 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v1.2.0
-
 ## [1.1.2] - 2026-10-29
 
 ### 🚀 Features
@@ -42,7 +56,6 @@
 - Upgrade Node.js version from 22 to 24
 - *(release)* 发版脚本同步前端 package.json 版本号
 - Release v1.1.2
-
 ## [1.0.0] - 2026-10-29
 
 ### 🚀 Features
@@ -65,7 +78,6 @@
 
 - CHANGELOG 版本段落间补空行
 - Release v1.0.0
-
 ## [0.8.0] - 2026-10-06
 
 ### 🚀 Features
@@ -84,7 +96,6 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.8.0
-
 ## [0.7.0] - 2026-10-06
 
 ### 🚀 Features
@@ -94,14 +105,12 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.7.0
-
 ## [0.6.1] - 2026-09-09
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(md2x-gui)* 更新应用图标资源
 - Release v0.6.1
-
 ## [0.6.0] - 2026-09-09
 
 ### 🚀 Features
@@ -112,22 +121,24 @@
 
 - Add LICENSE.
 - Release v0.6.0
-
 ## [0.2.3] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* 新增 macOS 单架构 dmg 构建并优化产物命名
 - Release v0.2.3
-
 ## [0.2.1] - 2026-08-24
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(icons)* 更新应用图标
 - Release v0.2.1
-
 ## [0.4.1] - 2026-08-13
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v0.4.1
+## [0.4.0] - 2026-08-13
 
 ### 🚀 Features
 
@@ -140,8 +151,6 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.4.0
-- Release v0.4.1
-
 ## [0.3.1] - 2026-08-12
 
 ### 🚀 Features
@@ -158,7 +167,6 @@
 - *(ci)* 升级 Actions 依赖与 pnpm 版本
 - *(release)* 升级版本至 0.3.0
 - Release v0.3.1
-
 ## [0.2.0] - 2026-08-08
 
 ### 🚀 Features
@@ -197,43 +205,40 @@
 ### ◀️ Revert
 
 - *(core)* 撤销代码块圆角文本框，保留段落底纹与文字内边距
-
 ## [0.1.7] - 2026-08-07
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(ci)* 更新CLI产物名称从md2x-cli为md2x
 - Release v0.1.7
-
 ## [0.1.6] - 2026-08-06
-
-### 🚜 Refactor
-
-- *(ci)* 将macOS通用构建拆分为独立步骤
 
 ### 📚 Documentation
 
 - *(README)* 添加系统要求说明与macOS最低版本配置
 
+### 🚜 Refactor
+
+- *(ci)* 将macOS通用构建拆分为独立步骤
+
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.1.6
-
 ## [0.1.5] - 2026-08-06
 
 ### 🚀 Features
 
 - *(ci)* 支持macOS universal构建并移除AppImage和MSI
 
-### 🚜 Refactor
-
-- *(release)* 结构化改造，自动检测仓库/版本文件/分支，支持 --install 全局安装
-
 ### 📚 Documentation
 
 - Release 脚本结构化设计规格
 - 规格补充全局安装与 cwd 检测设计
 - Release 脚本结构化实现计划
+
+### 🚜 Refactor
+
+- *(release)* 结构化改造，自动检测仓库/版本文件/分支，支持 --install 全局安装
 
 ### 🎨 Styling
 
@@ -243,7 +248,6 @@
 
 - *(ci)* 移除主干推送触发，仅保留标签触发
 - Release v0.1.5
-
 ## [0.1.3] - 2026-08-06
 
 ### 🚀 Features
@@ -253,14 +257,12 @@
 ### ⚙️ Miscellaneous Tasks
 
 - Release v0.1.3
-
 ## [0.1.2] - 2026-08-06
 
 ### ⚙️ Miscellaneous Tasks
 
 - *(release)* Use gh CLI to create release and upload only installer artifacts
 - Release v0.1.2
-
 ## [0.1.1] - 2026-08-06
 
 ### 🚀 Features
