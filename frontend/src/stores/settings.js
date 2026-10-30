@@ -9,6 +9,35 @@ const LS_VIEW_MODE = 'mpe-view-mode'
 const LS_TEMPLATE_ID = 'mpe-template-id'
 const LS_TOOLBAR_VISIBLE = 'mpe-toolbar-visible'
 const LS_TREE_VISIBLE = 'mpe-tree-visible'
+const LS_EXPORT_PRESETS = 'mpe-export-presets'
+
+/// 预设允许的导出格式：与后端 export_<格式> 命令、菜单项一一对应。
+/// 白名单而不是「任意字符串」——存档里混进一个不存在的格式，
+/// 界面上会显示成一条正常预设，点了才发现导出没反应
+const PRESET_FORMATS = ['html', 'pdf', 'docx', 'folder']
+
+/// 读取预设存档：结构非法或字段越界的整条丢弃，不因一条坏数据拖垮整个列表
+function readPresets() {
+  let raw
+  try {
+    raw = JSON.parse(localStorage.getItem(LS_EXPORT_PRESETS) || '[]')
+  } catch (_) {
+    return []
+  }
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter(p => p && typeof p.id === 'string' && p.id && typeof p.name === 'string' && p.name.trim())
+    .filter(p => PRESET_FORMATS.includes(p.format))
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      format: p.format,
+      // 模版缺失时落到内置模版：预设不该因为删了模版就整条不可用
+      templateId: typeof p.templateId === 'string' && p.templateId ? p.templateId : 'default',
+      theme: p.theme === 'dark' ? 'dark' : 'light',
+      fullWidth: !!p.fullWidth
+    }))
+}
 
 // 合法档位：浅色 / 暗色。
 // 与导出页面右下角切换按钮保持一致 —— 那边是二态互切，没有「跟随系统」档。
@@ -39,6 +68,11 @@ export const useSettingsStore = defineStore('settings', () => {
   // 全宽模式临时收起、打开/关闭文件夹这类流程性动作不写进来，
   // 否则下次启动的初始状态会被上一次的临时状态顶掉
   const treeVisible = ref(localStorage.getItem(LS_TREE_VISIBLE) !== '0')
+
+  // 导出预设：把「格式 + 模版 + 主题 + 全宽」存成一组，菜单「文件 → 导出」直达。
+  // 模版的可调变量不在预设里——它们按模版 id 存在后端，切模版自然跟着走；
+  // 复制多份到预设里反而会出现「同一模版两套配色」的错位。
+  const exportPresets = ref(readPresets())
 
   // 主题变更订阅者：预览需要据此重新渲染，保证「设置里切的 = 预览里看到的」
   const themeListeners = new Set()
@@ -126,6 +160,47 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(LS_TREE_VISIBLE, val ? '1' : '0')
   }
 
+  /// 把预设列表同步到原生菜单：菜单项 id 为 `preset:<预设 id>`，
+  /// 点击后前端按 id 查表取出完整参数。失败只影响菜单入口，
+  /// 设置面板里的列表照常可用，因此不抛错——注意 invoke 返回 Promise，
+  /// 必须接 .catch，否则失败会变成一条未处理的 rejection。
+  function syncPresetMenu() {
+    try {
+      invoke('set_export_presets', {
+        presets: exportPresets.value.map(p => ({ id: p.id, name: p.name }))
+      }).catch(() => {})
+    } catch (_) {}
+  }
+
+  function persistPresets() {
+    localStorage.setItem(LS_EXPORT_PRESETS, JSON.stringify(exportPresets.value))
+    syncPresetMenu()
+  }
+
+  /// 新增预设：重名直接拒绝（菜单里两行同名无法区分），
+  /// 由调用方给出提示，而不是悄悄生成一个看不出差别的条目。
+  function addExportPreset(preset) {
+    const name = (preset.name || '').trim()
+    if (!name) return null
+    if (exportPresets.value.some(p => p.name === name)) return null
+    const created = {
+      id: 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name,
+      format: PRESET_FORMATS.includes(preset.format) ? preset.format : 'html',
+      templateId: preset.templateId || 'default',
+      theme: preset.theme === 'dark' ? 'dark' : 'light',
+      fullWidth: !!preset.fullWidth
+    }
+    exportPresets.value = [...exportPresets.value, created]
+    persistPresets()
+    return created
+  }
+
+  function removeExportPreset(id) {
+    exportPresets.value = exportPresets.value.filter(p => p.id !== id)
+    persistPresets()
+  }
+
   return {
     theme,
     lang,
@@ -136,6 +211,7 @@ export const useSettingsStore = defineStore('settings', () => {
     bumpTemplateVars,
     toolbarVisible,
     treeVisible,
+    exportPresets,
     setTheme,
     setLang,
     setFullWidth,
@@ -143,6 +219,9 @@ export const useSettingsStore = defineStore('settings', () => {
     setTemplateId,
     setToolbarVisible,
     setTreeVisible,
+    syncPresetMenu,
+    addExportPreset,
+    removeExportPreset,
     onThemeChange,
     prefersDark
   }

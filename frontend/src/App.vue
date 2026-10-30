@@ -382,10 +382,15 @@ async function onSavePdf() {
   }
 }
 
-async function onExportDoc(format) {
+async function onExportDoc(format, preset) {
   const ext = format
   const nameMap = { html: 'HTML 文档', pdf: 'PDF 文档', docx: 'Word 文档' }
   const base = (fileName.value || 'document').replace(/\.md$/i, '')
+  // 预设导出时按预设里的参数走，而不是当前设置：两者可能不一致
+  // （用户在菜单里点了「交审 PDF」，不该用上次调过的主题去导）
+  const theme = preset?.theme || settings.theme
+  const fullWidth = typeof preset?.fullWidth === 'boolean' ? preset.fullWidth : settings.fullWidth
+  const templateId = preset?.templateId || settings.templateId
   try {
     const d = await invoke('plugin:dialog|save', {
       options: {
@@ -401,9 +406,9 @@ async function onExportDoc(format) {
     } else {
       await invoke('export_' + format, {
         dst: d,
-        fullWidth: settings.fullWidth,
-        theme: settings.theme,
-        templateId: settings.templateId
+        fullWidth,
+        theme,
+        templateId
       })
     }
     setStatus('statusExportReady', 'ready')
@@ -413,9 +418,12 @@ async function onExportDoc(format) {
 }
 
 // 导出整个文件夹为单个 HTML：把目录下所有 Markdown 聚合到一页
-async function onExportFolder() {
+async function onExportFolder(preset) {
   if (!folderPath.value) return
   const base = folderName.value || 'document'
+  const theme = preset?.theme || settings.theme
+  const fullWidth = typeof preset?.fullWidth === 'boolean' ? preset.fullWidth : settings.fullWidth
+  const templateId = preset?.templateId || settings.templateId
   try {
     const d = await invoke('plugin:dialog|save', {
       options: {
@@ -429,9 +437,9 @@ async function onExportFolder() {
     const count = await invoke('export_folder_html', {
       src: folderPath.value,
       dst: d,
-      fullWidth: settings.fullWidth,
-      theme: settings.theme,
-      templateId: settings.templateId
+      fullWidth,
+      theme,
+      templateId
     })
     setStatus(
       settings.lang === 'en'
@@ -598,10 +606,59 @@ function syncMenuState() {
   }).catch(() => {})
 }
 
+/// 套用预设：把主题 / 全宽 / 模版切到预设里存的那套。
+/// 导出本身会显式带上这些参数，切设置是为了「所见即所得」——
+/// 点完预设去设置面板，看到的应该就是实际生效的那一组。
+function applyPreset(preset) {
+  if (preset.theme && preset.theme !== settings.theme) settings.setTheme(preset.theme)
+  if (typeof preset.fullWidth === 'boolean' && preset.fullWidth !== settings.fullWidth) {
+    settings.setFullWidth(preset.fullWidth)
+  }
+  if (preset.templateId && preset.templateId !== settings.templateId) {
+    settings.setTemplateId(preset.templateId)
+  }
+}
+
+/// 按预设导出：设置面板点预设、菜单点预设共用这一条链路
+async function runPreset(preset) {
+  if (!preset) return
+  applyPreset(preset)
+  if (preset.format === 'folder') {
+    if (!isFolderView.value) {
+      setStatus(
+        settings.lang === 'en'
+          ? 'This preset exports a folder; open a folder first'
+          : '该预设导出整个文件夹，请先打开文件夹',
+        'error'
+      )
+      return
+    }
+    await onExportFolder(preset)
+    return
+  }
+  await onExportDoc(preset.format, preset)
+}
+
 /// 菜单「文件 → 导出 ▸ X」：与预览右键菜单同一个分发口，
-/// 保证「菜单 / 右键 / 工具栏」三条入口的行为完全一致
+/// 保证「菜单 / 右键 / 工具栏」三条入口的行为完全一致。
+/// 预设项以 `preset:<id>` 形式到达，参数在前端本地表里查
 function onMenuExport(format) {
   if (!format) return
+  if (format.startsWith('preset:')) {
+    const id = format.slice('preset:'.length)
+    const preset = settings.exportPresets.find(p => p.id === id)
+    if (preset) {
+      runPreset(preset)
+    } else {
+      // 预设可能在别处被删了（菜单项尚未刷新），提示而不是静默无响应
+      setStatus(
+        settings.lang === 'en' ? 'Preset no longer exists' : '预设已不存在',
+        'error'
+      )
+      settings.syncPresetMenu()
+    }
+    return
+  }
   if (format === 'folder') {
     onExportFolder()
     return
@@ -794,6 +851,9 @@ onMounted(async () => {
   watch(() => settings.toolbarVisible, syncMenuState, { immediate: true })
   // 有没有可导出的内容决定「导出 ▸」整组是否可用
   watch([hasFile, isFolderView], syncMenuState)
+  // 预设 → 原生菜单：启动时铺一次（变更时由 store 的 persistPresets 重建）。
+  // 菜单在后端 setup 阶段建好，挂载时 append 才安全
+  settings.syncPresetMenu()
 
   // 监听内嵌预览页转发来的内部链接点击
   window.addEventListener('message', onIframeMessage)
@@ -953,7 +1013,12 @@ onMounted(async () => {
     </Transition>
 
     <Transition name="fade">
-      <SettingsDialog v-if="showSettings" @close="showSettings = false" />
+      <SettingsDialog
+        v-if="showSettings"
+        @close="showSettings = false"
+        @apply-preset="applyPreset"
+        @export-preset="runPreset"
+      />
     </Transition>
   </div>
 </template>

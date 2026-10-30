@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '../stores/settings.js'
 import { t } from '../i18n/index.js'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'apply-preset', 'export-preset'])
 const settings = useSettingsStore()
 
 const platform = ref('')
@@ -279,6 +279,60 @@ const templateMissing = computed(() =>
   !templates.value.some(t => t.id === settings.templateId)
 )
 
+// ===== 导出预设 =====
+// 一组「格式 + 模版 + 主题 + 全宽」，存在本地并同步到原生菜单「文件 → 导出」。
+// 模版变量不单独存：它按模版 id 存在后端，预设换了模版就自动带上那套取值。
+const PRESET_FORMATS = [
+  { value: 'html', labelKey: 'presetFormatHtml' },
+  { value: 'pdf', labelKey: 'presetFormatPdf' },
+  { value: 'docx', labelKey: 'presetFormatDocx' },
+  { value: 'folder', labelKey: 'presetFormatFolder' },
+]
+const presetDraft = ref(false)
+const presetName = ref('')
+const presetFormat = ref('html')
+const presetHint = ref('')
+
+function startPresetDraft() {
+  presetDraft.value = true
+  presetName.value = ''
+  presetFormat.value = 'html'
+  presetHint.value = ''
+}
+
+function savePreset() {
+  const created = settings.addExportPreset({
+    name: presetName.value,
+    format: presetFormat.value,
+    templateId: settings.templateId,
+    theme: settings.theme,
+    fullWidth: settings.fullWidth,
+  })
+  if (!created) {
+    // 空名与重名都落到这一句：菜单里两行同名分不清，不如直接拒绝
+    presetHint.value = t('presetNameInvalid', settings.lang)
+    return
+  }
+  presetDraft.value = false
+  presetHint.value = ''
+}
+
+/// 预设的一行摘要：格式 · 模版 · 主题（· 全宽），让人不点开就知道导出成什么
+function presetMeta(p) {
+  const fmt = PRESET_FORMATS.find(f => f.value === p.format)
+  const parts = [fmt ? t(fmt.labelKey, settings.lang) : p.format]
+  parts.push(presetTemplateName(p.templateId))
+  parts.push(t(p.theme === 'dark' ? 'presetThemeDark' : 'presetThemeLight', settings.lang))
+  if (p.fullWidth) parts.push(t('presetFullWidth', settings.lang))
+  return parts.join(' · ')
+}
+
+function presetTemplateName(id) {
+  if (!id || id === 'default') return t('templateBuiltinName', settings.lang)
+  const tpl = templates.value.find(t => t.id === id)
+  return tpl ? tplName(tpl) : id
+}
+
 // ===== 外部图表工具状态 =====
 // d2 / dot 图表块依赖外部 CLI，未装时静默降级保留代码块。
 // 这里把检测结果亮出来，让人知道这个功能存在、装了依赖即生效。
@@ -481,8 +535,97 @@ async function setDefault() {
             </div>
           </template>
 
-          <!-- ===== 导出：模版选择（卡片 + 缩略图） ===== -->
+          <!-- ===== 导出：预设 + 模版选择（卡片 + 缩略图） ===== -->
           <template v-else-if="activeTab === 'export'">
+            <!-- 导出预设：常用组合存成一条，菜单「文件 → 导出」直达 -->
+            <div class="mb-4 pb-4" :style="{ borderBottom: '1px solid var(--border)' }">
+              <div class="flex items-center justify-between gap-2 mb-2.5">
+                <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">
+                  {{ t('settingsExportPresets', settings.lang) }}
+                </div>
+                <button
+                  v-if="!presetDraft"
+                  class="h-7 px-2.5 rounded-lg border text-[12px] font-medium cursor-pointer flex items-center gap-1.5"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+                  @click="startPresetDraft"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" class="w-3.5 h-3.5">
+                    <path d="M8 3.5v9M3.5 8h9" />
+                  </svg>
+                  {{ t('btnAddPreset', settings.lang) }}
+                </button>
+              </div>
+
+              <!-- 新建：就地命名 + 选格式，不弹系统 prompt（Tauri 下不可用） -->
+              <div v-if="presetDraft" class="flex items-center gap-2 mb-2.5 flex-wrap">
+                <input
+                  v-model="presetName"
+                  class="flex-1 min-w-[160px] h-8 px-2.5 rounded-lg text-[12px] outline-none"
+                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                  :placeholder="t('presetNamePlaceholder', settings.lang)"
+                  maxlength="24"
+                  @keyup.enter="savePreset"
+                  @keyup.esc="presetDraft = false"
+                />
+                <select
+                  v-model="presetFormat"
+                  class="h-8 px-2 rounded-lg text-[12px] cursor-pointer outline-none"
+                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                >
+                  <option v-for="f in PRESET_FORMATS" :key="f.value" :value="f.value">
+                    {{ t(f.labelKey, settings.lang) }}
+                  </option>
+                </select>
+                <button
+                  class="h-8 px-3 rounded-lg text-[12px] font-medium cursor-pointer"
+                  :style="{ background: 'var(--accent)', color: '#fff', border: 'none' }"
+                  @click="savePreset"
+                >{{ t('presetSave', settings.lang) }}</button>
+                <button
+                  class="h-8 px-3 rounded-lg border text-[12px] cursor-pointer"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }"
+                  @click="presetDraft = false"
+                >{{ t('presetCancel', settings.lang) }}</button>
+              </div>
+
+              <div v-if="settings.exportPresets.length" class="flex flex-col gap-1.5">
+                <div
+                  v-for="p in settings.exportPresets"
+                  :key="p.id"
+                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg min-w-0"
+                  :style="{ border: '1px solid var(--border)' }"
+                >
+                  <span class="text-[12px] font-semibold flex-shrink-0 max-w-[110px] truncate" :style="{ color: 'var(--text)' }" :title="p.name">{{ p.name }}</span>
+                  <span class="text-[10.5px] font-mono truncate min-w-0 flex-1" :style="{ color: 'var(--text-dim)' }" :title="presetMeta(p)">{{ presetMeta(p) }}</span>
+                  <button
+                    class="h-6 px-2 rounded-md border text-[11px] cursor-pointer flex-shrink-0"
+                    :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+                    :title="t('presetApplyTip', settings.lang)"
+                    @click="emit('apply-preset', p)"
+                  >{{ t('presetApply', settings.lang) }}</button>
+                  <button
+                    class="h-6 px-2 rounded-md border text-[11px] cursor-pointer flex-shrink-0"
+                    :style="{ borderColor: 'var(--border)', color: 'var(--accent)', background: 'transparent' }"
+                    :title="t('presetExportTip', settings.lang)"
+                    @click="emit('export-preset', p)"
+                  >{{ t('presetExport', settings.lang) }}</button>
+                  <button
+                    class="w-6 h-6 rounded-md flex items-center justify-center cursor-pointer flex-shrink-0"
+                    :style="{ color: 'var(--text-dim)', background: 'transparent', border: 'none' }"
+                    :title="t('presetDelete', settings.lang)"
+                    @click="settings.removeExportPreset(p.id)"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" class="w-3 h-3">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <p v-else class="text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('presetEmpty', settings.lang) }}</p>
+              <p v-if="presetHint" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ presetHint }}</p>
+              <p class="mt-1.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('presetNote', settings.lang) }}</p>
+            </div>
+
             <div>
               <div class="flex items-center justify-between gap-2 mb-3">
                 <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>

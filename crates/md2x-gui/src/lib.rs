@@ -3,12 +3,12 @@ use md2x_core::chrome;
 use md2x_core::converter;
 use md2x_core::error::MpeError;
 use md2x_core::{ext_diagram, template};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
-use tauri::menu::{CheckMenuItem, MenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tokio::sync::oneshot;
 
@@ -476,8 +476,14 @@ struct AppState {
     export_docx_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// 菜单「导出 ▸ X」请求的格式（html/pdf/docx/folder），前端轮询消费。
     /// 用 Option<String> 而不是四个 bool：一次点击只可能产生一个格式，
-    /// 布尔组会让「同时置真」这种非法状态在类型上成立
+    /// 布尔组会让「同时置真」这种非法状态在类型上成立。
+    /// 导出预设被点击时这里存放 `preset:<id>`，由前端查表得到完整参数
     export_request: Mutex<Option<String>>,
+    /// 「导出 ▸」下动态挂载的预设项与它们上方的分隔线。
+    /// 前端是预设的唯一来源（存 localStorage），每次变更整组重建：
+    /// 保留这些句柄才能把上一批 remove 掉，否则改一次名就多一行。
+    preset_items: Mutex<Vec<MenuItem<tauri::Wry>>>,
+    preset_sep: Mutex<Option<PredefinedMenuItem<tauri::Wry>>>,
     /// 缓存的预览结果（PDF + HTML），文件没变时复用
     cached_preview: Mutex<Option<CachedPreview>>,
 }
@@ -533,6 +539,8 @@ pub fn run() {
         export_pdf_item: Mutex::new(None),
         export_docx_item: Mutex::new(None),
         export_request: Mutex::new(None),
+        preset_items: Mutex::new(Vec::new()),
+        preset_sep: Mutex::new(None),
         cached_preview: Mutex::new(None),
     };
 
@@ -783,15 +791,16 @@ pub fn run() {
             "quit" => {
                 app.exit(0);
             }
-            // 导出子菜单：只记录格式，真正的保存对话框与写盘都在前端
-            // （与工具栏按钮、预览右键菜单共用同一实现，避免两条导出链路跑偏）
+            // 导出子菜单：只记录请求，真正的保存对话框与写盘都在前端
+            // （与工具栏按钮、预览右键菜单共用同一实现，避免两条导出链路跑偏）。
+            // 预设项走同一个通道，存 `preset:<id>`，参数由前端查本地预设表
             id => {
-                let Some(format) = export_format_of(id) else {
+                let Some(req) = menu_export_request(id) else {
                     return;
                 };
                 if let Some(state) = app.try_state::<AppState>() {
-                    if let Ok(mut req) = state.export_request.lock() {
-                        *req = Some(format.to_string());
+                    if let Ok(mut slot) = state.export_request.lock() {
+                        *slot = Some(req);
                     }
                 }
             }
@@ -830,6 +839,7 @@ pub fn run() {
             check_show_open_folder,
             check_show_close_folder,
             check_menu_export,
+            set_export_presets,
             is_fullscreen,
             register_default_md_handler,
             list_templates,
@@ -1077,10 +1087,100 @@ fn export_format_of(id: &str) -> Option<&'static str> {
 }
 
 /// 前端轮询：检查菜单「文件 → 导出 ▸ X」是否被点击。
-/// 返回格式字符串（html/pdf/docx/folder），无请求时返回 None
+/// 返回格式字符串（html/pdf/docx/folder），或预设请求 `preset:<id>`；无请求时返回 None
 #[tauri::command]
 fn check_menu_export(s: State<AppState>) -> Option<String> {
     s.export_request.lock().ok().and_then(|mut req| req.take())
+}
+
+/// 导出预设菜单项 id 前缀：`preset:<预设 id>` 与固定格式项共用一条请求通道，
+/// 前端据前缀决定是「直接导出该格式」还是「先套用预设再导出」。
+const PRESET_ID_PREFIX: &str = "preset:";
+
+/// 菜单项 id → 前端导出请求（`html` / `folder` / `preset:xxx`）。
+///
+/// 预设项与格式项混在同一段 `match` 兜底分支里，若不在这里统一收口，
+/// 新增的预设项会被当成未知 id 静默丢弃——点了菜单什么都不发生。
+fn menu_export_request(id: &str) -> Option<String> {
+    if let Some(rest) = id.strip_prefix(PRESET_ID_PREFIX) {
+        return if rest.is_empty() {
+            None
+        } else {
+            Some(id.to_string())
+        };
+    }
+    export_format_of(id).map(|s| s.to_string())
+}
+
+/// 前端同步过来的预设菜单项：只需要 id 与显示名。
+/// 格式/模版/主题等参数留在前端——菜单只负责发出「哪个预设」这一个信号。
+#[derive(Debug, Deserialize)]
+struct ExportPresetMenuItem {
+    id: String,
+    name: String,
+}
+
+/// 按前端当前的预设列表重建「文件 → 导出」下的预设项。
+///
+/// 整组重建而不是增量更新：预设可改名、可删除、可调整顺序，
+/// 增量对账的代码量更大且更容易残留旧行。
+///
+/// 注：菜单对象的创建与增删在 macOS 上要求主线程，tauri 内部已统一
+/// 用 `run_on_main_thread` 派发，因此这里在命令线程里直接改是安全的；
+/// 但也正因如此它进不了单测（Rust 测试跑在工作线程，muda 会直接 panic）。
+#[tauri::command]
+fn set_export_presets(
+    app: tauri::AppHandle,
+    presets: Vec<ExportPresetMenuItem>,
+    s: State<AppState>,
+) -> Result<(), String> {
+    let menu = s.export_menu.lock().map_err(|e| e.to_string())?;
+    let Some(ref submenu) = *menu else {
+        return Ok(());
+    };
+    // 先摘掉上一批（含分隔线），否则改名会留下旧名字那一行
+    {
+        let mut items = s.preset_items.lock().map_err(|e| e.to_string())?;
+        for it in items.drain(..) {
+            submenu.remove(&it).ok();
+        }
+    }
+    {
+        let mut sep = s.preset_sep.lock().map_err(|e| e.to_string())?;
+        if let Some(it) = sep.take() {
+            submenu.remove(&it).ok();
+        }
+    }
+
+    // 先建后挂：全部非法时直接返回，不留一条悬空分隔线
+    let mut created: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for p in &presets {
+        let label = p.name.trim();
+        if label.is_empty() || p.id.trim().is_empty() || seen.contains(&p.id.as_str()) {
+            continue;
+        }
+        seen.push(&p.id);
+        // 菜单宽度受名称长度影响，过长的名字截断而不是让整列变宽
+        let label: String = label.chars().take(24).collect();
+        let item: MenuItem<tauri::Wry> =
+            tauri::menu::MenuItemBuilder::with_id(format!("{PRESET_ID_PREFIX}{}", p.id), label)
+                .build(&app)
+                .map_err(|e| format!("创建预设菜单项失败: {e}"))?;
+        created.push(item);
+    }
+    if created.is_empty() {
+        return Ok(());
+    }
+
+    let sep = PredefinedMenuItem::separator(&app).map_err(|e| format!("创建分隔线失败: {e}"))?;
+    submenu.append(&sep).map_err(|e| e.to_string())?;
+    for it in &created {
+        submenu.append(it).map_err(|e| e.to_string())?;
+    }
+    *s.preset_items.lock().map_err(|e| e.to_string())? = created;
+    *s.preset_sep.lock().map_err(|e| e.to_string())? = Some(sep);
+    Ok(())
 }
 
 /// 前端回写菜单状态：目录树/工具栏可见性、全宽状态与勾选保持一致。
@@ -2438,6 +2538,21 @@ mod tests {
         for id in ["open_file", "close_file", "settings", "toggle_tree", ""] {
             assert_eq!(export_format_of(id), None, "{id} 不该被当成导出格式");
         }
+    }
+
+    #[test]
+    fn preset_menu_ids_route_to_their_own_request() {
+        // 预设项必须原样带 id 透出来，前端才能查表拿到格式/模版/主题
+        assert_eq!(
+            menu_export_request("preset:p_weekly"),
+            Some("preset:p_weekly".to_string())
+        );
+        // 固定格式项仍走原路
+        assert_eq!(menu_export_request("export_pdf"), Some("pdf".to_string()));
+        // 只有前缀没有 id 的残缺项、未知项一律丢弃，避免前端拿着空 id 查不到预设
+        assert_eq!(menu_export_request("preset:"), None);
+        assert_eq!(menu_export_request("preset"), None);
+        assert_eq!(menu_export_request("about"), None);
     }
 
     /// 仅收集 .md（忽略大小写），剪除不含 Markdown 的目录，目录优先排序
