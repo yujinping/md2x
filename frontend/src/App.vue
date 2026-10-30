@@ -417,7 +417,9 @@ async function onExportDoc(format, preset) {
   }
 }
 
-// 导出整个文件夹为单个 HTML：把目录下所有 Markdown 聚合到一页
+// 「文件夹 → 单个 HTML」直接导出。文档顺序与被排除的文件都来自文件树上的
+// 拖动/右键操作（已存进后端排版存档），导出时后端原样读回——
+// 所以这里不需要再弹一层排序对话框，界面上看到的就是导出的样子。
 async function onExportFolder(preset) {
   if (!folderPath.value) return
   const base = folderName.value || 'document'
@@ -437,9 +439,7 @@ async function onExportFolder(preset) {
     const count = await invoke('export_folder_html', {
       src: folderPath.value,
       dst: d,
-      fullWidth,
-      theme,
-      templateId
+      opts: { fullWidth, theme, templateId }
     })
     setStatus(
       settings.lang === 'en'
@@ -450,6 +450,13 @@ async function onExportFolder(preset) {
   } catch (err) {
     setStatus(err.toString(), 'error')
   }
+}
+
+/// 文件树里拖动排序或排除后，后端已按新规则重算树，这里换上新的一份。
+/// 主动刷新而不是就地改数组：树长什么样始终由后端一套规则决定，
+/// 界面与导出不会各说各话。
+function onTreeLayoutChange(tree) {
+  if (Array.isArray(tree)) folderTree.value = tree
 }
 
 function toggleFullWidth() {
@@ -861,6 +868,21 @@ onMounted(async () => {
   try {
     await listen('md2x://fullscreen', (e) => postFullscreenState(e.payload))
   } catch (_) {}
+  // 拖入窗口的高亮：原生拖放被 Rust 侧接管，页面内收不到 dragover，
+  // 只能由后端在 DragDropEvent 上广播。事件名要和 lib.rs 里的常量一致
+  try {
+    await listen('md2x://drag-state', (e) => {
+      isDragging.value = !!e.payload
+    })
+  } catch (_) {}
+  // 兜底：后端事件若因异常丢失（如拖入途中窗口失焦），高亮会一直挂着。
+  // 松开鼠标一律熄灭，宁可少亮一次也不要留一块洗不掉的蓝虚线。
+  window.addEventListener('mouseup', () => {
+    isDragging.value = false
+  })
+  window.addEventListener('blur', () => {
+    isDragging.value = false
+  })
   // 先读一次初始全屏状态：带全屏配置启动时不会有 Resized 事件，
   // 光等广播会漏掉初始态，状态栏就会在多出来的 32px 里露出来
   try {
@@ -944,9 +966,6 @@ onMounted(async () => {
       class="flex flex-1 overflow-hidden relative transition-colors duration-150"
       :class="{ 'bg-[#f0f0ff]': isDragging }"
       :style="{ outline: isDragging ? '2px dashed #6366f1' : 'none', outlineOffset: isDragging ? '-2px' : '0' }"
-      @dragover.prevent="isDragging = true"
-      @dragleave="isDragging = false"
-      @drop.prevent="isDragging = false"
     >
       <!-- 左侧文件树（文件夹视图） -->
       <FileTree
@@ -958,6 +977,7 @@ onMounted(async () => {
         :current-path="currentPath"
         @open-file="openMdFile"
         @hide-tree="hideFileTree"
+        @layout-change="onTreeLayoutChange"
       />
 
       <main class="flex-1 min-w-0 overflow-hidden bg-white relative">

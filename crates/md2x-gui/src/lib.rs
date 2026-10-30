@@ -295,6 +295,114 @@ fn var_store_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("template-vars.json"))
 }
 
+/// 用户对某个文件夹的排版存档：文档顺序 + 被排除的节点。
+///
+/// 两者放同一份记录里，因为它们本来就是「同一棵树上的两类标注」：
+/// 顺序决定先读哪篇，排除决定哪篇不进产物。分成两个文件只会让
+/// 「排好序又排除几篇」变成两次写盘、两处可能只成功一半。
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct FolderLayout {
+    /// 同层顺序：相对路径列表（目录也占位，故可把文件拖到目录之前）
+    order: Vec<String>,
+    /// 被排除的相对路径：文件或目录（目录连同内容一并排除）
+    exclude: Vec<String>,
+}
+
+/// 存档条目：兼容旧版本只存顺序数组的形态。
+///
+/// 老存档是一整个 `Vec<String>`，直接按新结构反序列化会失败并把用户
+/// 拖了半天的顺序当成「没有自定义」丢掉。用 untagged 两种形态都收。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum LayoutEntry {
+    /// 旧版：只有顺序
+    Legacy(Vec<String>),
+    /// 新版：顺序 + 排除
+    Full(FolderLayout),
+}
+
+impl LayoutEntry {
+    fn into_layout(self) -> FolderLayout {
+        match self {
+            LayoutEntry::Legacy(order) => FolderLayout {
+                order,
+                exclude: Vec::new(),
+            },
+            LayoutEntry::Full(l) => l,
+        }
+    }
+}
+
+/// 用户自定义文件夹排版的存档路径：`<app_data_dir>/doc-order.json`。
+///
+/// 与 [`var_store_path`] 同一处设计意图：顺序是「本机偏好」，不该写进
+/// 被导出的文档目录——否则用户 git status 里会多出一个自己没创建的文件，
+/// 提交后还会影响其他人的导出顺序。
+///
+/// 文件名沿用 `doc-order.json` 而不改成 `folder-layout.json`：
+/// 改名等于让所有已有用户的自定义顺序失效，而文件内容已用
+/// [`LayoutEntry`] 兼容两种形态，没必要为了名字漂亮付这个代价。
+fn doc_order_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录: {e}"))?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("创建应用数据目录失败: {e}"))?;
+    Ok(base.join("doc-order.json"))
+}
+
+/// 读取全部排版存档：`{ "<文件夹绝对路径>": { order, exclude } }`。
+///
+/// 读取失败一律当作「没有自定义」——存档损坏不该让导出失败，
+/// 只是回到默认排序。
+fn read_layout_store(app: &tauri::AppHandle) -> HashMap<String, FolderLayout> {
+    let Ok(p) = doc_order_path(app) else {
+        return HashMap::new();
+    };
+    read_layout_store_file(&p)
+}
+
+fn read_layout_store_file(p: &Path) -> HashMap<String, FolderLayout> {
+    let Ok(raw) = std::fs::read_to_string(p) else {
+        return HashMap::new();
+    };
+    let raw_map: HashMap<String, LayoutEntry> = serde_json::from_str(&raw).unwrap_or_default();
+    raw_map
+        .into_iter()
+        .map(|(k, v)| (k, v.into_layout()))
+        .collect()
+}
+
+fn write_layout_store(
+    app: &tauri::AppHandle,
+    store: &HashMap<String, FolderLayout>,
+) -> Result<(), String> {
+    let p = doc_order_path(app)?;
+    let raw = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("序列化文档排版失败: {e}"))?;
+    std::fs::write(&p, raw).map_err(|e| format!("写入文档排版失败: {e}"))
+}
+
+/// 读取某个文件夹的排版存档（无记录时返回默认空排版）。
+fn load_layout(app: &tauri::AppHandle, root: &Path) -> FolderLayout {
+    read_layout_store(app)
+        .remove(&doc_order_key(root))
+        .unwrap_or_default()
+}
+
+/// 存档键：文件夹的规范化绝对路径。
+///
+/// 用 `canonicalize` 而非原样字符串，是为了让 `/a/b` 与 `/a/b/`、
+/// 符号链接路径指向同一份记录。取不到规范路径时退回原字符串——
+/// 宁可多一条记录，也不要让「存了顺序却读不回来」。
+fn doc_order_key(root: &Path) -> String {
+    std::fs::canonicalize(root)
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
 /// 读取变量存档：`{ "模版 id": { "变量 key": "取值" } }`。
 ///
 /// 读取失败一律当作「没有任何自定义」——存档损坏不该让预览/导出失败，
@@ -408,6 +516,9 @@ struct TreeNode {
     is_dir: bool,
     /// 文件为空；目录为子节点列表（已剪除不含 .md 的空目录）
     children: Vec<TreeNode>,
+    /// 是否被用户排除：树里显示为灰色，导出时不参与。
+    /// 目录被排除时其子节点也一律为 true——父节点标记本身就代表整棵子树
+    excluded: bool,
 }
 
 struct CachedPreview {
@@ -551,14 +662,27 @@ pub fn run() {
             tx: Mutex::new(None),
         })
         .on_window_event(|w, e| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = e {
-                if let Some(p) = paths.first() {
-                    let path = p.to_string_lossy().to_string();
-                    // 通知前端等待的 wait_for_drop
-                    if let Some(state) = w.try_state::<DropChannel>() {
-                        if let Ok(mut guard) = state.tx.lock() {
-                            if let Some(tx) = guard.take() {
-                                let _ = tx.send(path);
+            if let tauri::WindowEvent::DragDrop(ev) = e {
+                // 拖入高亮：原生拖放由这里接管，页面内收不到 dragover，
+                // 高亮只能靠这条广播驱动（前端监听 md2x://drag-state）。
+                //
+                // 只有 Enter / Over 算「拖入中」：Drop 之后文件已经落地、
+                // Leave 时鼠标已离开，两者都必须关掉高亮，否则蓝虚线会一直挂在窗口上。
+                let active = matches!(
+                    ev,
+                    tauri::DragDropEvent::Enter { .. } | tauri::DragDropEvent::Over { .. }
+                );
+                let _ = w.app_handle().emit(DRAG_STATE_EVENT, active);
+
+                if let tauri::DragDropEvent::Drop { paths, .. } = ev {
+                    if let Some(p) = paths.first() {
+                        let path = p.to_string_lossy().to_string();
+                        // 通知前端等待的 wait_for_drop
+                        if let Some(state) = w.try_state::<DropChannel>() {
+                            if let Ok(mut guard) = state.tx.lock() {
+                                if let Some(tx) = guard.take() {
+                                    let _ = tx.send(path);
+                                }
                             }
                         }
                     }
@@ -813,6 +937,8 @@ pub fn run() {
             save_pdf_as,
             export_html,
             export_folder_html,
+            get_folder_layout,
+            save_folder_layout,
             export_pdf,
             export_docx,
             get_file_name,
@@ -1271,6 +1397,10 @@ fn sync_fullscreen_check(app: &tauri::AppHandle, fullscreen: bool) -> bool {
 
 /// 全屏状态变化事件名：前端据此把状态回写给预览 iframe 里的浮动按钮
 const FULLSCREEN_EVENT: &str = "md2x://fullscreen";
+
+/// 拖入窗口状态事件名（bool）：原生拖放由 Rust 侧接管，页面内收不到
+/// dragover，拖入高亮只能由后端广播驱动
+const DRAG_STATE_EVENT: &str = "md2x://drag-state";
 
 /// 切换窗口全屏并广播状态。
 ///
@@ -1882,28 +2012,55 @@ fn export_html(
     Ok(())
 }
 
+/// 文件夹聚合导出时除路径外的全部选项。
+///
+/// 打成一个结构体而不是继续往函数上加参数：命令参数个数已超 clippy 阈值，
+/// 且这几个值总是成组传递（预设导出时整套替换），聚在一起语义更清楚。
+#[derive(Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct FolderExportOptions {
+    /// 是否全宽排版
+    full_width: bool,
+    /// 主题档位：auto / light / dark
+    theme: Option<String>,
+    /// 模版 id
+    template_id: Option<String>,
+}
+
 /// 导出整个文件夹为单个文件：把目录下所有 Markdown 聚合，可选 HTML / PDF / DOCX
 ///
 /// PDF 走 CDP 生成，带标准书签树（阅读器侧边栏可点击跳转）并在首页附目录页。
+///
+/// 顺序与排除**只有一个来源**：磁盘上的文件夹排版存档（见 [`load_layout`]）。
+/// 前端拖动树节点、右键排除之后把结果存进存档，导出时原样读回——
+/// 参数里不再重复携带一份 order，避免「对话框传了顺序、存档里是另一份」
+/// 这种两处真相源导致的分歧。三种格式共用同一份排版，
+/// 所以「HTML 里是排序后的，DOCX 里还是乱的」不可能发生。
 #[tauri::command(rename_all = "camelCase")]
 fn export_folder_html(
     src: String,
     dst: String,
-    full_width: Option<bool>,
-    theme: Option<String>,
-    template_id: Option<String>,
-    app: tauri::AppHandle,
+    opts: FolderExportOptions,
     format: Option<String>,
+    app: tauri::AppHandle,
 ) -> Result<usize, String> {
-    let full_width = full_width.unwrap_or(false);
-    let theme = theme_arg::parse_opt(&theme);
-    let tpl = load_selected_template(&app, &template_id);
+    let full_width = opts.full_width;
+    let theme = theme_arg::parse_opt(&opts.theme);
+    let tpl = load_selected_template(&app, &opts.template_id);
     let root = PathBuf::from(&src);
     if !root.is_dir() {
         return Err(format!("不是有效的文件夹: {}", root.display()));
     }
-    let result = md2x_core::aggregate::aggregate_folder_to_html(&root, full_width, theme, Some(&tpl))
-        .map_err(|e| format!("导出失败: {e}"))?;
+    let layout = load_layout(&app, &root);
+    let result = md2x_core::aggregate::aggregate_folder_to_html_with_config(
+        &root,
+        full_width,
+        theme,
+        Some(&tpl),
+        &layout.order,
+        &layout.exclude,
+    )
+    .map_err(|e| format!("导出失败: {e}"))?;
 
     let fmt = format.unwrap_or_else(|| "html".to_string());
     match fmt.as_str() {
@@ -1920,7 +2077,8 @@ fn export_folder_html(
             pdf_res.map_err(|e| format!("导出失败: {e}"))?;
         }
         "docx" => {
-            let md = aggregate::concat_docs(&root).map_err(|e| format!("导出失败: {e}"))?;
+            let md = aggregate::concat_docs_with_config(&root, &layout.order, &layout.exclude)
+                .map_err(|e| format!("导出失败: {e}"))?;
             // 转DOCX 需要一个真实文件路径以解析相对图片，故先落临时文件
             let tmp = std::env::temp_dir().join(format!("md2x-agg-{}.md", std::process::id()));
             std::fs::write(&tmp, &md).map_err(|e| format!("导出失败: {e}"))?;
@@ -2005,6 +2163,35 @@ fn get_file_path(s: State<AppState>) -> Option<String> {
         .and_then(|g| g.as_ref().map(|p| normalize_path(p)))
 }
 
+/// 读取某个文件夹的排版存档（顺序 + 排除）。
+///
+/// 前端不需要自己维护一份排版状态：拖动/排除之后调用 [`save_folder_layout`]，
+/// 再调 [`open_folder`] 重新拉树即可。前端与磁盘只有一处真相源。
+#[tauri::command(rename_all = "camelCase")]
+fn get_folder_layout(folder: String, app: tauri::AppHandle) -> FolderLayout {
+    let root = PathBuf::from(&folder);
+    load_layout(&app, &root)
+}
+
+/// 保存某个文件夹的排版；两项都为空即「恢复默认」——直接删掉该条记录，
+/// 不留空记录残影，这样「从未排过」与「排完又重置」在存档里等价。
+#[tauri::command(rename_all = "camelCase")]
+fn save_folder_layout(
+    folder: String,
+    layout: FolderLayout,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let root = PathBuf::from(&folder);
+    let key = doc_order_key(&root);
+    let mut store = read_layout_store(&app);
+    if layout.order.is_empty() && layout.exclude.is_empty() {
+        store.remove(&key);
+    } else {
+        store.insert(key, layout);
+    }
+    write_layout_store(&app, &store)
+}
+
 /// 清空当前打开的文件（切换文件夹卸载旧预览时用），回到无文件初始状态
 #[tauri::command]
 fn clear_file(s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), String> {
@@ -2018,10 +2205,17 @@ fn clear_file(s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), St
 
 // ==================== 文件夹 / 文件树命令 ====================
 
-/// 打开文件夹：记录根目录并递归扫描生成 .md 文件树（剪除不含 Markdown 的目录）
+/// 打开文件夹：记录根目录并递归扫描生成 .md 文件树（剪除不含 Markdown 的目录）。
+///
+/// 扫描时带上该文件夹已保存的排版（顺序 + 排除），所以重新打开同一个文件夹
+/// 看到的仍是上次拖动/排除后的样子——「看到的即导出将得到的」不必每次重排。
+///
+/// 前端在拖动或排除之后也复用本命令重新拉一次树：与其在前端就地改数组、
+/// 不如让后端按规则重算，避免「前端乐观更新」和磁盘上的真实状态漂移。
 #[tauri::command]
 fn open_folder(
     path: String,
+    app: tauri::AppHandle,
     s: State<AppState>,
     window: tauri::WebviewWindow,
 ) -> Result<Vec<TreeNode>, String> {
@@ -2031,7 +2225,8 @@ fn open_folder(
     }
     *s.folder_root.lock().map_err(|e| e.to_string())? = Some(p.clone());
     apply_window_title(&window, &s);
-    scan_tree(&p)
+    let layout = load_layout(&app, &p);
+    scan_tree(&p, &p, &layout)
 }
 
 /// 关闭文件夹：回到单文件视图
@@ -2065,11 +2260,31 @@ fn path_kind(path: String) -> String {
     }
 }
 
-/// 递归扫描目录内 Markdown 文件树
-fn scan_tree(dir: &Path) -> Result<Vec<TreeNode>, String> {
+/// 递归扫描目录内 Markdown 文件树。
+///
+/// 排序与排除都交给 `collector::SiblingOrder` / `collector::is_excluded`：
+/// 树只负责「长什么样」，顺序与排除的**规则**留在 core 一处，导出侧用同一个
+/// 比较器拍平同一棵树，于是「树上看到的顺序」与「导出产物的顺序」恒等。
+///
+/// `layout` 为空时即为纯粹的默认视图，与用户从未动过拖动的状态一致。
+fn scan_tree(dir: &Path, root: &Path, layout: &FolderLayout) -> Result<Vec<TreeNode>, String> {
+    let ord = md2x_core::aggregate::collector::SiblingOrder::new(
+        &layout.order,
+        md2x_core::aggregate::collector::top_readme_rel(root),
+    );
+    scan_dir(dir, root, layout, &ord, 0)
+}
+
+fn scan_dir(
+    dir: &Path,
+    root: &Path,
+    layout: &FolderLayout,
+    ord: &md2x_core::aggregate::collector::SiblingOrder,
+    depth: usize,
+) -> Result<Vec<TreeNode>, String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("读取文件夹失败: {e}"))?;
-    let mut dirs: Vec<TreeNode> = Vec::new();
-    let mut files: Vec<TreeNode> = Vec::new();
+    // (相对根路径, 节点)：相对路径要在排序前算好，比较函数里不能现算
+    let mut items: Vec<(String, TreeNode)> = Vec::new();
     for entry in rd.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -2077,33 +2292,51 @@ fn scan_tree(dir: &Path) -> Result<Vec<TreeNode>, String> {
             Ok(t) => t,
             Err(_) => continue,
         };
+        let rel = md2x_core::aggregate::collector::relative_path(&path, root);
+        // 整棵子树被排除的目录仍要出现在树里（显示为灰色，用户可见并可取消），
+        // 但不必再深入扫描：排除是继承的，子节点一个都不会进产物
+        let excluded_self = md2x_core::aggregate::collector::is_excluded(&rel, &layout.exclude);
         if ft.is_dir() {
-            // 递归子目录，剪除不含任何 .md 的目录
-            if let Ok(children) = scan_tree(&path) {
-                if !children.is_empty() {
-                    dirs.push(TreeNode {
-                        name,
-                        path: normalize_path(&path),
-                        is_dir: true,
-                        children,
-                    });
-                }
+            // 跳过依赖/产物目录：规则与导出的 collect 共用同一份，
+            // 否则会出现「树里能看到 node_modules 下的 README、导出却没有」
+            if md2x_core::aggregate::collector::should_skip_dir(&name) {
+                continue;
             }
+            let children = if excluded_self || depth > 12 {
+                Vec::new()
+            } else {
+                scan_dir(&path, root, layout, ord, depth + 1)?
+            };
+            // 剪除不含任何 .md 的空目录（被排除的目录保留，让用户能看见并取消）
+            if children.is_empty() && !excluded_self {
+                continue;
+            }
+            items.push((
+                rel,
+                TreeNode {
+                    name,
+                    path: normalize_path(&path),
+                    is_dir: true,
+                    children,
+                    excluded: excluded_self,
+                },
+            ));
         } else if ft.is_file() && is_markdown(&name) {
-            files.push(TreeNode {
-                name,
-                path: normalize_path(&path),
-                is_dir: false,
-                children: Vec::new(),
-            });
+            items.push((
+                rel,
+                TreeNode {
+                    name,
+                    path: normalize_path(&path),
+                    is_dir: false,
+                    children: Vec::new(),
+                    excluded: excluded_self,
+                },
+            ));
         }
         // 符号链接不追踪，避免循环；指向 .md 的链接按非目录跳过
     }
-    // 目录优先，各自按名称排序
-    dirs.sort_by_key(|a| a.name.to_lowercase());
-    files.sort_by_key(|a| a.name.to_lowercase());
-    dirs.extend(files);
-    Ok(dirs)
+    items.sort_by(|a, b| ord.cmp((&a.0, a.1.is_dir), (&b.0, b.1.is_dir)));
+    Ok(items.into_iter().map(|(_, n)| n).collect())
 }
 
 /// 是否 Markdown 文件（.md 后缀）
@@ -2566,8 +2799,8 @@ mod tests {
         std::fs::write(sub.join("skip.txt"), "x").unwrap();
         std::fs::write(d.join("top.md"), "# top").unwrap();
 
-        let tree = scan_tree(&d).unwrap();
-        // 目录在前，文件在后；skip.txt 与空目录 empty 均被剪除
+        let tree = scan_tree(&d, &d, &FolderLayout::default()).unwrap();
+        // 未排序时目录在前、文件在后；skip.txt 与空目录 empty 均被剪除
         assert_eq!(tree.len(), 2);
         assert!(tree[0].is_dir);
         assert_eq!(tree[0].name, "sub");
@@ -2788,6 +3021,180 @@ mod tests {
         for bad in ["", ".", "..", "../etc", "a/b", "a\\b", ".hidden"] {
             assert!(!is_safe_template_id(bad), "{bad} 应被拒绝");
         }
+    }
+
+    #[test]
+    fn 排版存档可往返且容忍损坏() {
+        let dir = fresh_dir("doc-order-store");
+        let p = dir.join("doc-order.json");
+
+        // 缺失文件 → 空表（首次运行）
+        assert!(read_layout_store_file(&p).is_empty());
+
+        let mut store: HashMap<String, FolderLayout> = HashMap::new();
+        store.insert(
+            "/docs/proj".to_string(),
+            FolderLayout {
+                order: vec!["req.md".to_string(), "design.md".to_string()],
+                exclude: vec!["old".to_string()],
+            },
+        );
+        {
+            let raw = serde_json::to_string_pretty(&store).unwrap();
+            std::fs::write(&p, raw).unwrap();
+        }
+        let back = read_layout_store_file(&p);
+        assert_eq!(
+            back["/docs/proj"].order,
+            vec!["req.md", "design.md"],
+            "写入后应能原样读回"
+        );
+        assert_eq!(back["/docs/proj"].exclude, vec!["old"], "排除项也要读回");
+
+        // 存档损坏 → 当作没有自定义排版，不能让导出失败
+        std::fs::write(&p, "{ not json").unwrap();
+        assert!(read_layout_store_file(&p).is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 旧版纯顺序存档仍被读入() {
+        // 老版本存的是 { 目录: ["a.md", ...] }。改结构后若直接按新形态反序列化
+        // 会整份解析失败，把用户排了很久的顺序悄悄丢掉——必须兼容
+        let dir = fresh_dir("doc-order-legacy");
+        let p = dir.join("doc-order.json");
+        std::fs::write(
+            &p,
+            r#"{"/docs/proj": ["req.md", "design.md"]}"#,
+        )
+        .unwrap();
+
+        let back = read_layout_store_file(&p);
+        assert_eq!(back["/docs/proj"].order, vec!["req.md", "design.md"]);
+        assert!(back["/docs/proj"].exclude.is_empty(), "旧存档没有排除项");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 文档顺序键使用规范路径() {
+        // /a/b 与 /a/b/ 指向同一份记录：取不到规范路径时退回原串，
+        // 但存在时必须归一，否则换一种写法打开文件夹就丢失顺序
+        let dir = fresh_dir("doc-order-key");
+        let key1 = doc_order_key(&dir);
+        let key2 = doc_order_key(&dir.join("."));
+        assert_eq!(key1, key2, "同一目录的不同写法应得到同一个键");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 建一棵小树：`README.md` / `zzz.md` / `sub/a.md`
+    fn tree_fixture(tag: &str) -> PathBuf {
+        let d = fresh_dir(tag);
+        for (rel, body) in [
+            ("README.md", "# 索引"),
+            ("zzz.md", "# Z"),
+            ("sub/a.md", "# A"),
+            ("sub/deep/b.md", "# B"),
+        ] {
+            let p = d.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        d
+    }
+
+    /// 把树按先序遍历拍平成相对路径，与 `collect` 的输出对比
+    fn flatten(nodes: &[TreeNode], root: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(nodes: &[TreeNode], root: &Path, out: &mut Vec<String>) {
+            for n in nodes {
+                if n.is_dir {
+                    walk(&n.children, root, out);
+                } else {
+                    out.push(
+                        Path::new(&n.path)
+                            .strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        walk(nodes, root, &mut out);
+        out
+    }
+
+    #[test]
+    fn 文件树的扁平化顺序等于导出顺序() {
+        // 这是「拖动树节点就能排导出顺序」的全部前提：
+        // 树里从上到下的读法，必须与聚合产物里 doc-0、doc-1… 的顺序一致
+        let d = tree_fixture("tree-vs-collect");
+        let layout = FolderLayout::default();
+        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let from_tree = flatten(&tree, &d);
+        let collected = md2x_core::aggregate::collector::collect_with_config(&d, &[], &[]);
+        let from_collect: Vec<String> = collected
+            .docs
+            .iter()
+            .map(|x| x.rel_path.clone())
+            .collect();
+        assert_eq!(from_tree, from_collect);
+        assert_eq!(
+            from_tree,
+            vec!["README.md", "sub/deep/b.md", "sub/a.md", "zzz.md"],
+            "README 置顶，其余目录在前、深度优先（sub 内 deep 目录先于 a.md）"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn 文件树的拖动顺序同样反映到导出() {
+        let d = tree_fixture("tree-order");
+        // 用户把 zzz.md 拖到最前、把 sub 拖到 README 之后
+        let layout = FolderLayout {
+            order: vec![
+                "zzz.md".to_string(),
+                "README.md".to_string(),
+                "sub".to_string(),
+            ],
+            exclude: Vec::new(),
+        };
+        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let from_tree = flatten(&tree, &d);
+        let collected =
+            md2x_core::aggregate::collector::collect_with_config(&d, &layout.order, &[]);
+        let from_collect: Vec<String> = collected
+            .docs
+            .iter()
+            .map(|x| x.rel_path.clone())
+            .collect();
+        assert_eq!(from_tree, from_collect, "树与导出必须一致");
+        assert_eq!(
+            from_tree,
+            vec!["zzz.md", "README.md", "sub/deep/b.md", "sub/a.md"]
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn 被排除的节点仍在树里但标记为灰色() {
+        // 排除不等于隐藏：用户必须能看见它、并就地取消排除
+        let d = tree_fixture("tree-excluded");
+        let layout = FolderLayout {
+            order: Vec::new(),
+            exclude: vec!["sub".to_string()],
+        };
+        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let sub = tree.iter().find(|n| n.name == "sub").expect("被排除的目录仍在树里");
+        assert!(sub.excluded, "应标记为已排除（前端置灰）");
+        // 排除是继承的，不必把每个子文件都写进列表
+        let collected =
+            md2x_core::aggregate::collector::collect_with_config(&d, &[], &layout.exclude);
+        let names: Vec<&str> = collected.docs.iter().map(|x| x.rel_path.as_str()).collect();
+        assert_eq!(names, vec!["README.md", "zzz.md"], "被排除的目录不进产物");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
