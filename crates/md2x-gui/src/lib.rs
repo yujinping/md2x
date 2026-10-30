@@ -92,46 +92,153 @@ const TEMPLATES_README: &str = r#"# md2x 模版目录
 - `{{WIDTH_VARS}}`：全宽模式 CSS
 - `{{GITHUB_MD_CSS}}` / `{{ATOM_ONE_DARK_CSS}}` / `{{HIGHLIGHT_JS}}`：内置样式与脚本，按需取用
 
+## 自带模版（可直接复制修改）
+
+应用首次运行会把三套自带模版写进本目录，风格各不相同：
+
+| 目录 | 风格 | 适合 |
+|---|---|---|
+| `sample/` | 单栏窄幅 + 顶部目录框 | 长文阅读、打印 |
+| `docs/` | 左侧固定目录 + 滚动高亮 | 手册、说明文档 |
+| `paper/` | 衬线正文 + 首行缩进 + 打印目录页 | 汇报、论文、PDF |
+
+它们是**普通的模版包**：改了就生效，删了不会影响其他模版。
+推荐做法是整份复制成 `<你的名字>/` 再改（设置面板的「复制为副本」可直接完成这一步），
+原目录保持干净，方便对照。
+
+已存在的目录永远不会被覆盖；删掉的也不会在下次启动时被写回——
+判断依据是同目录下的 `.bundled-seeded` 记录文件，想恢复删掉它再重启应用即可。
+
 ## 注意
 
 - 模版需自备样式与交互脚本；引用外部 CSS/JS 会破坏自包含性，建议内联
 - 聚合导出的文档树、主题切换、全宽等交互需模版自行支持
-- `sample/` 是随应用附带的示例包；本目录内没有任何模版时会被自动重新生成
 "#;
 
-/// 随二进制打包的示例模版包，首次使用时铺到模版目录，作为约定的活文档
-const SAMPLE_TEMPLATE_HTML: &str = include_str!("../../../templates/sample/template.html");
-const SAMPLE_TEMPLATE_MANIFEST: &str = include_str!("../../../templates/sample/template.json");
-const SAMPLE_TEMPLATE_PREVIEW: &str = include_str!("../../../templates/sample/preview.svg");
-
-/// 目录里一个模版都没有时，铺一份示例包。
+/// 一份自带模版包：编译进二进制，首次运行写入模版目录，供用户复制后修改。
 ///
-/// 只在「零模版」时写入：既保证新用户能立刻看到约定长什么样，
-/// 又不会在用户已自建模版时多塞无关目录。
-fn seed_sample_template(dir: &Path) {
-    if !template::scan_templates(dir).is_empty() {
-        return;
-    }
-    let d = dir.join("sample");
-    if std::fs::create_dir_all(&d).is_err() {
-        return;
-    }
-    let _ = std::fs::write(d.join(template::TEMPLATE_HTML), SAMPLE_TEMPLATE_HTML);
-    let _ = std::fs::write(
-        d.join(template::TEMPLATE_MANIFEST),
-        SAMPLE_TEMPLATE_MANIFEST,
-    );
-    let _ = std::fs::write(d.join("preview.svg"), SAMPLE_TEMPLATE_PREVIEW);
+/// 刻意没有任何「自带」特权——写入后它就是普通模版包，走同一条扫描与渲染路径，
+/// 用户改完立即生效，改坏了删掉即可。
+struct BundledTemplate {
+    /// 目录名，同时是模版 id
+    id: &'static str,
+    /// 入口 HTML（必须含 {{BODY}}）
+    html: &'static str,
+    /// 清单（名称/描述/缩略图字段）
+    manifest: &'static str,
+    /// 缩略图文件名，需与清单里的 `preview` 字段一致
+    preview_name: &'static str,
+    /// 缩略图内容
+    preview: &'static str,
 }
 
-/// 确保模板目录存在、带说明文件与示例模版，返回目录路径。
+/// 三套风格互不重叠的自带模版：
+/// 简约（单栏窄幅 + 顶部目录框）、技术文档（左侧固定目录 + 滚动高亮）、
+/// 正式报告（衬线 + 首行缩进 + 打印目录页）。
+const BUNDLED_TEMPLATES: &[BundledTemplate] = &[
+    BundledTemplate {
+        id: "sample",
+        html: include_str!("../../../templates/sample/template.html"),
+        manifest: include_str!("../../../templates/sample/template.json"),
+        preview_name: "preview.svg",
+        preview: include_str!("../../../templates/sample/preview.svg"),
+    },
+    BundledTemplate {
+        id: "docs",
+        html: include_str!("../../../templates/docs/template.html"),
+        manifest: include_str!("../../../templates/docs/template.json"),
+        preview_name: "preview.svg",
+        preview: include_str!("../../../templates/docs/preview.svg"),
+    },
+    BundledTemplate {
+        id: "paper",
+        html: include_str!("../../../templates/paper/template.html"),
+        manifest: include_str!("../../../templates/paper/template.json"),
+        preview_name: "preview.svg",
+        preview: include_str!("../../../templates/paper/preview.svg"),
+    },
+];
+
+/// 播种记录文件名（隐藏文件，放在模版目录内）。
+///
+/// 只靠「目录是否存在」判断无法区分「从没写过」与「用户删掉了」，
+/// 缺了这份记录，用户删掉不想要的自带模版后，下次启动又会被铺回来。
+const SEED_STATE_FILE: &str = ".bundled-seeded";
+
+/// 读取播种记录：一行一个 id，`#` 开头为注释
+fn read_seed_state(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|s| {
+            s.lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 写回播种记录；带上恢复说明，避免用户看到陌生隐藏文件时无从下手
+fn write_seed_state(path: &Path, ids: &[String]) {
+    let mut out = String::from(
+        "# md2x 自带模版播种记录（自动生成）：列在这里的模版不会再被自动写回。\n\
+         # 想恢复某个自带模版：删掉本文件后重启应用即可重新铺开；\n\
+         # 想保留自己的改动：把模版目录复制一份改名再改，原目录别动。\n",
+    );
+    for id in ids {
+        out.push_str(id);
+        out.push('\n');
+    }
+    let _ = std::fs::write(path, out);
+}
+
+/// 把缺失的自带模版逐个写入模版目录，已存在的一律跳过。
+///
+/// 两条硬约束：
+/// - **目录已存在就不写**：里面可能是用户改过的版本，覆盖等于吞掉工作成果
+/// - **删掉的不复活**：用户明确删掉的模版由播种记录记住，下次启动不再冒出来
+fn seed_bundled_templates(dir: &Path) {
+    let state_path = dir.join(SEED_STATE_FILE);
+    let mut seeded = read_seed_state(&state_path);
+    let mut dirty = false;
+    for t in BUNDLED_TEMPLATES {
+        let exists = dir.join(t.id).is_dir();
+        let recorded = seeded.iter().any(|s| s == t.id);
+        if exists || recorded {
+            // 已存在（可能是用户改过的版本）或用户删过：都补记一笔，
+            // 否则老版本种下的模版因为没有记录，删掉后仍会被写回来
+            if !recorded {
+                seeded.push(t.id.to_string());
+                dirty = true;
+            }
+            continue;
+        }
+        let d = dir.join(t.id);
+        if std::fs::create_dir_all(&d).is_err() {
+            continue;
+        }
+        let _ = std::fs::write(d.join(template::TEMPLATE_HTML), t.html);
+        let _ = std::fs::write(d.join(template::TEMPLATE_MANIFEST), t.manifest);
+        let _ = std::fs::write(d.join(t.preview_name), t.preview);
+        // 只记录真正落盘的：磁盘满等失败场景下次启动还能补写
+        if d.join(template::TEMPLATE_HTML).is_file() {
+            seeded.push(t.id.to_string());
+            dirty = true;
+        }
+    }
+    if dirty {
+        write_seed_state(&state_path, &seeded);
+    }
+}
+
+/// 确保模板目录存在、带说明文件与自带模版，返回目录路径。
 fn ensure_templates_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let d = templates_dir(app)?;
     let readme = d.join("README.md");
     if !readme.exists() {
         let _ = std::fs::write(&readme, TEMPLATES_README);
     }
-    seed_sample_template(&d);
+    seed_bundled_templates(&d);
     Ok(d)
 }
 
@@ -610,6 +717,7 @@ pub fn run() {
             register_default_md_handler,
             list_templates,
             open_templates_dir,
+            duplicate_template,
             check_external_tools,
             repo_relative_path,
             copy_text,
@@ -1354,6 +1462,103 @@ fn open_templates_dir(app: tauri::AppHandle) -> Result<(), String> {
     let ok = std::process::Command::new("xdg-open").arg(&dir).status();
     ok.map_err(|e| format!("打开目录失败: {e}"))?;
     Ok(())
+}
+
+/// 模版 id 是否可安全地当作**单层目录名**使用。
+///
+/// id 由前端回传（来源是历史选择记录或扫描结果），必须挡住 `..`、路径分隔符
+/// 与隐藏目录，否则复制操作可能落到模版目录之外。
+fn is_safe_template_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && !id.starts_with('.')
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains('\0')
+}
+
+/// 递归复制目录；符号链接一律跳过。
+///
+/// 跳过链接是安全考虑：模版目录里的链接可能指向任意位置，
+/// 跟随复制会把无关文件卷进用户模版。
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_symlink() {
+            continue;
+        }
+        let to = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir(&entry.path(), &to)?;
+        } else if ty.is_file() {
+            std::fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+/// 为副本挑一个不冲突的目录名：`<id>-copy`，已存在则 `<id>-copy-2`、`-3`……
+fn unique_copy_id(dir: &Path, id: &str) -> String {
+    let base = format!("{id}-copy");
+    if !dir.join(&base).exists() {
+        return base;
+    }
+    for n in 2..100 {
+        let candidate = format!("{base}-{n}");
+        if !dir.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    format!("{base}-{}", std::process::id())
+}
+
+/// 给副本的清单加上「副本」后缀。
+///
+/// 两张卡片同名时用户分不清哪张是自己的，直接在元数据里改掉最省事；
+/// 清单缺失或损坏时按 id 生成一份最简清单，副本也能正常出现在列表里。
+fn name_copy_package(dir: &Path, source_id: &str) {
+    let path = dir.join(template::TEMPLATE_MANIFEST);
+    let mut v: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let base = v
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(source_id)
+        .to_string();
+    v["name"] = serde_json::Value::String(format!("{base} 副本"));
+    if let Ok(s) = serde_json::to_string_pretty(&v) {
+        let _ = std::fs::write(&path, format!("{s}\n"));
+    }
+}
+
+/// 复制模版包为副本，返回新模版 id。
+///
+/// 「复制自己改」比直接编辑自带模版更稳：原模版保持原样便于对照，
+/// 改坏了删掉副本即可，也不会在后续版本更新时被误覆盖。
+#[tauri::command]
+fn duplicate_template(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let dir = ensure_templates_dir(&app)?;
+    if !is_safe_template_id(&id) {
+        return Err(format!("非法的模版 id: {id}"));
+    }
+    let src = dir.join(&id);
+    // 只支持模版包：旧式单文件模版没有目录，改造成模版包才有意义
+    if !src.join(template::TEMPLATE_HTML).is_file() {
+        return Err("该模版不是模版包（缺少 template.html），无法复制".to_string());
+    }
+    let dst_id = unique_copy_id(&dir, &id);
+    let dst = dir.join(&dst_id);
+    copy_dir(&src, &dst).map_err(|e| format!("复制模版失败: {e}"))?;
+    name_copy_package(&dst, &id);
+    Ok(dst_id)
 }
 
 /// 检测外部图表 CLI（d2 / dot）安装状态，供设置面板展示「装了即用」的功能可用性。
@@ -2191,30 +2396,94 @@ mod tests {
     }
 
     #[test]
-    fn 空模版目录会铺示例包() {
+    fn 首次启动铺齐全部自带模版() {
         let dir = fresh_dir("seed-empty");
-        seed_sample_template(&dir);
+        seed_bundled_templates(&dir);
         let found = template::scan_templates(&dir);
-        assert_eq!(found.len(), 1, "应且仅应生成一个示例包");
-        assert_eq!(found[0].id, "sample");
-        assert_eq!(found[0].name, "简约排版", "示例包应带可读的展示名");
-        assert!(found[0].preview.is_some(), "示例包应带缩略图");
+        let ids: Vec<&str> = found.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, vec!["docs", "paper", "sample"], "三套自带模版都应有展示名并进入列表");
+        for e in &found {
+            assert!(!e.name.trim().is_empty(), "{} 应带可读展示名", e.id);
+            assert!(e.preview.is_some(), "{} 应带缩略图", e.id);
+            assert!(
+                template::preview_data_url(e.preview.as_ref().unwrap()).is_some(),
+                "{} 的缩略图应能编码为 data URL",
+                e.id
+            );
+        }
+        // 再跑一次不应产生任何变化：播种是幂等的
+        seed_bundled_templates(&dir);
+        assert_eq!(template::scan_templates(&dir).len(), 3);
+    }
+
+    #[test]
+    fn 已存在的模版目录不被覆盖() {
+        // 用户改过 docs 之后，播种不能把他的改动冲掉
+        let dir = fresh_dir("seed-existing");
+        let docs = dir.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("template.html"), "<html><body>我的改动{{BODY}}</body></html>")
+            .unwrap();
+        seed_bundled_templates(&dir);
+        let html = std::fs::read_to_string(docs.join("template.html")).unwrap();
+        assert!(html.contains("我的改动"), "已存在目录必须原样保留");
+        assert!(dir.join("paper/template.html").is_file(), "缺失的自带模版应补齐");
+        // 老版本只种过 sample、没有播种记录：这类目录也要补记，
+        // 否则用户删掉后下次启动又会被写回来
         assert!(
-            template::preview_data_url(found[0].preview.as_ref().unwrap()).is_some(),
-            "缩略图应能编码为 data URL"
+            read_seed_state(&dir.join(SEED_STATE_FILE)).iter().any(|s| s == "docs"),
+            "已存在的自带模版也应进入播种记录"
         );
     }
 
     #[test]
-    fn 已有模版时不再塞示例包() {
-        // 用户自建模版后，示例包不应再冒出来干扰列表
-        let dir = fresh_dir("seed-existing");
-        std::fs::write(dir.join("mine.html"), "<html><body>{{BODY}}</body></html>").unwrap();
-        seed_sample_template(&dir);
+    fn 删掉的自带模版不再复活() {
+        // 用户明确删掉的自带模版，下次启动不该又冒出来
+        let dir = fresh_dir("seed-deleted");
+        seed_bundled_templates(&dir);
+        let docs = dir.join("docs");
+        std::fs::remove_dir_all(&docs).unwrap();
+        seed_bundled_templates(&dir);
+        assert!(!docs.exists(), "删掉后不应被重新写入");
+        assert!(dir.join(SEED_STATE_FILE).is_file(), "播种记录应落盘");
         let ids: Vec<String> = template::scan_templates(&dir)
             .into_iter()
             .map(|e| e.id)
             .collect();
-        assert_eq!(ids, vec!["mine"]);
+        assert_eq!(ids, vec!["paper", "sample"]);
+    }
+
+    #[test]
+    fn 复制模版包生成带副本后缀的副本() {
+        let dir = fresh_dir("duplicate");
+        let src = dir.join("mine");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("template.html"), "<p>{{BODY}}</p>").unwrap();
+        std::fs::write(src.join("template.json"), r#"{"name":"我的模版"}"#).unwrap();
+
+        let id = unique_copy_id(&dir, "mine");
+        assert_eq!(id, "mine-copy");
+        copy_dir(&src, &dir.join(&id)).unwrap();
+        name_copy_package(&dir.join(&id), "mine");
+
+        let found = template::scan_templates(&dir);
+        let copy = found
+            .iter()
+            .find(|e| e.id == "mine-copy")
+            .expect("副本应被扫描到");
+        assert_eq!(copy.name, "我的模版 副本", "副本应改名，避免与源模版同名");
+        assert_eq!(
+            unique_copy_id(&dir, "mine"),
+            "mine-copy-2",
+            "再次复制不能覆盖已有副本"
+        );
+    }
+
+    #[test]
+    fn 模版id拒绝路径穿越() {
+        assert!(is_safe_template_id("docs"));
+        for bad in ["", ".", "..", "../etc", "a/b", "a\\b", ".hidden"] {
+            assert!(!is_safe_template_id(bad), "{bad} 应被拒绝");
+        }
     }
 }

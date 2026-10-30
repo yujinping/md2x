@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="{{THEME_LOCK}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  // {{THEME_LOCK}} 为 auto 时先落定为具体档位再绘样式
+  (function () {
+    var t = document.documentElement.getAttribute('data-theme');
+    if (t !== 'light' && t !== 'dark') {
+      document.documentElement.setAttribute(
+        'data-theme',
+        window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      );
+    }
+  })();
+</script>
+<title>{{TITLE}}</title>
+<!--
+  md2x 自带模版（正式报告）
+
+  用法：本目录整份复制成 <你的模版名>/ 再改，原目录保持干净便于对照。
+  约定：
+  - 入口文件必须叫 template.html，且含 {{BODY}} 占位符
+  - template.json 提供元数据（name/description/version/author/preview）
+  - preview.svg / preview.png 之一作缩略图
+
+  版式：衬线正文 + 黑体标题，居中书名、首行缩进两字、两端对齐，
+  屏幕上是「纸张」预览，导出 PDF 时自动分页并插入独立目录页（{{PRINT_TOC}}）。
+  本模版是固定版心，刻意不用 .sidebar / .main-content 类名：
+  设置里的「全宽」只影响屏幕预览，对打印排版没有意义。
+-->
+<style>{{GITHUB_MD_CSS}}</style>
+<style>
+  /* ===== 主题变量：暖纸质配色，与「简约 / 技术文档」两套冷色拉开差异 ===== */
+  :root {
+    --fg: #1c1a17;
+    --fg-dim: #6b6459;
+    --bg: #efece5;
+    --paper: #fffdf8;
+    --border: #d8d2c6;
+    --accent: #8a3324;
+    --code-bg: #f4f0e8;
+    --sheet-width: 820px;
+  }
+  html[data-theme="dark"] {
+    --fg: #e9e4da;
+    --fg-dim: #a49c8e;
+    --bg: #12100d;
+    --paper: #1b1916;
+    --border: #3a352d;
+    --accent: #d98b6a;
+    --code-bg: #232019;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Songti SC", "STSong", "SimSun", "Source Han Serif SC",
+      "Noto Serif CJK SC", Georgia, "Times New Roman", serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== 纸张 ===== */
+  .sheet {
+    max-width: var(--sheet-width);
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 72px 78px 96px;
+    background: var(--paper);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .07);
+  }
+
+  /* ===== 书名区：双线 + 居中标题 ===== */
+  .head { text-align: center; margin: 0 0 34px; }
+  /* 书名上方用双线（border: double 比两条相邻 border 更容易渲染成清晰的两道细线） */
+  .rule-double { border-top: 6px double var(--fg); margin-bottom: 26px; }
+  .head h1.doc-title {
+    font-family: "PingFang SC", "Heiti SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+    font-size: 27px;
+    line-height: 1.45;
+    font-weight: 700;
+    letter-spacing: .02em;
+    margin: 0 0 26px;
+  }
+  .rule-thin { height: 1px; background: var(--border); }
+
+  /* ===== 目录：细线夹住的居中标签，与「简约排版」的圆角框不同 ===== */
+  .toc-block { margin: 0 0 40px; padding: 16px 0 18px; border-bottom: 1px solid var(--border); }
+  /* 无标题时 {{TOC}} 为空，整块连同上下细线一起消失 */
+  .toc-block:has(ul:empty) { display: none; }
+  .toc-title {
+    font-family: "PingFang SC", "Heiti SC", "Microsoft YaHei", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .5em;
+    text-align: center;
+    color: var(--fg-dim);
+    margin-bottom: 14px;
+    text-indent: .5em; /* letter-spacing 会在末字后多留一档，居中回补 */
+  }
+  .toc-block ul { list-style: none; margin: 0 auto; padding: 0; max-width: 420px; }
+  .toc-block ul ul { padding-left: 20px; }
+  .toc-block li { margin: 5px 0; font-size: 14px; line-height: 1.6; }
+  .toc-block a { color: var(--fg); text-decoration: none; border-bottom: 1px solid transparent; }
+  .toc-block a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  /* 本模版不启用逐级折叠：静态目录在打印时更稳 */
+  .toc-block .toc-toggle { display: none; }
+
+  /* ===== 正文 ===== */
+  .markdown-body {
+    font-size: 16px;
+    line-height: 1.9;
+    color: var(--fg);
+    background: transparent;
+    text-align: justify;
+    text-justify: inter-ideograph;
+    /* 把 github-markdown-css 依赖的变量指到本模版档位，避免它按系统深浅取色 */
+    --color-fg-default: var(--fg);
+    --color-fg-muted: var(--fg-dim);
+    --color-canvas-default: transparent;
+    --color-canvas-subtle: var(--code-bg);
+    --color-border-default: var(--border);
+    --color-border-muted: var(--border);
+    --color-neutral-muted: rgba(127, 127, 127, .16);
+    --color-accent-fg: var(--accent);
+  }
+  /* 中文行文习惯：正文段落首行缩进两个字（列表/引用/表格内不缩进） */
+  .markdown-body > p { text-indent: 2em; margin: 0 0 1em; }
+  .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+    font-family: "PingFang SC", "Heiti SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+    font-weight: 600;
+    text-align: left;
+    scroll-margin-top: 20px;
+  }
+  .markdown-body h1 { font-size: 22px; text-align: center; margin: 1.8em 0 .9em; }
+  .markdown-body h2 { font-size: 18.5px; margin: 2.1em 0 .8em; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+  .markdown-body h3 { font-size: 16.5px; margin: 1.7em 0 .6em; }
+  .markdown-body h4 { font-size: 15.5px; }
+  .markdown-body ul, .markdown-body ol { padding-left: 2em; }
+  .markdown-body li { text-align: left; margin: .3em 0; }
+  .markdown-body blockquote {
+    margin: 1.3em 0;
+    padding: .3em 1.2em;
+    border-left: 3px solid var(--border);
+    color: var(--fg-dim);
+  }
+  .markdown-body blockquote > p { text-indent: 0; margin: .4em 0; }
+  .markdown-body table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  .markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 8px 12px; }
+  .markdown-body th { background: var(--code-bg); font-family: "PingFang SC", "Microsoft YaHei", sans-serif; font-weight: 600; }
+  .markdown-body pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; line-height: 1.6; }
+  .markdown-body :not(pre) > code { background: var(--code-bg); border-radius: 3px; font-size: .92em; }
+  .markdown-body a { color: var(--accent); }
+  .markdown-body img { max-width: 100%; height: auto; }
+  .markdown-body hr { border: none; border-top: 3px double var(--border); margin: 2.4em 0; }
+
+  /* ===== 打印 / 导出 PDF ===== */
+  .print-toc { display: none; }
+  @page { size: A4; margin: 20mm 18mm; }
+  @media print {
+    body { background: #fff; }
+    .sheet {
+      max-width: none;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      background: #fff;
+      box-shadow: none;
+    }
+    /* 屏幕目录让位给打印目录页，避免两处目录重复 */
+    .toc-block { display: none; }
+    .print-toc { display: block; break-after: page; }
+    .print-toc ul { list-style: none; padding: 0; margin: 0; }
+    .print-toc li { margin: 7px 0; font-size: 13.5px; }
+    .print-toc .print-toc-title {
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .5em;
+      text-align: center;
+      margin: 0 0 24px;
+    }
+    .print-toc a { color: inherit; text-decoration: none; }
+    .markdown-body { font-size: 12pt; line-height: 1.85; }
+    .markdown-body a { color: inherit; text-decoration: none; }
+    .markdown-body h2, .markdown-body h3 { break-after: avoid; }
+    .markdown-body pre, .markdown-body table, .markdown-body blockquote, .markdown-body img { break-inside: avoid; }
+  }
+
+  /* ===== 窄屏：收窄留白，纸张感让位于可读性 ===== */
+  @media (max-width: 860px) {
+    .sheet { padding: 36px 22px 56px; box-shadow: none; }
+    .head h1.doc-title { font-size: 22px; }
+    .markdown-body { font-size: 15.5px; }
+  }
+</style>
+</head>
+<body>
+  <main class="sheet">
+    <header class="head">
+      <div class="rule-double"></div>
+      <h1 class="doc-title">{{TITLE}}</h1>
+      <div class="rule-thin"></div>
+    </header>
+
+    <section class="toc-block">
+      <div class="toc-title">目录</div>
+      <ul>{{TOC}}</ul>
+    </section>
+
+    {{PRINT_TOC}}
+    <article class="markdown-body">{{BODY}}</article>
+  </main>
+</body>
+</html>

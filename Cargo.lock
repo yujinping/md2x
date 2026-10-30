@@ -2127,6 +2127,7 @@ version = "1.1.2"
 dependencies = [
  "md2x-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

@@ -1,0 +1,7 @@
+{
+  "name": "正式报告",
+  "description": "自带模版：衬线正文、居中书名、首行缩进，打印为 PDF 时带独立目录页，适合汇报与论文",
+  "version": "1.0.0",
+  "author": "md2x",
+  "preview": "preview.svg"
+}

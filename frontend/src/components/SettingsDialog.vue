@@ -146,6 +146,33 @@ async function openTemplateDir() {
   try { await invoke('open_templates_dir') } catch (_) {}
 }
 
+// 复制当前模版为副本：自带模版改坏了不好回退，副本随便改，删了也不影响原模版。
+// 只有模版包可复制——内置模版编译在二进制里，旧式单文件模版没有目录可复制。
+const copying = ref(false)
+const copyHint = ref('')
+const copyFailed = ref(false)
+const canDuplicate = computed(() => {
+  const tpl = templates.value.find(x => x.id === settings.templateId)
+  return !!tpl && !tpl.builtin && tpl.packaged
+})
+
+async function duplicateSelected() {
+  if (!canDuplicate.value || copying.value) return
+  copying.value = true
+  copyFailed.value = false
+  copyHint.value = ''
+  try {
+    const newId = await invoke('duplicate_template', { id: settings.templateId })
+    await loadTemplates()
+    copyHint.value = t('templateCopied', settings.lang).replace('{id}', newId)
+  } catch (_) {
+    copyFailed.value = true
+    copyHint.value = t('templateCopyFail', settings.lang)
+  } finally {
+    copying.value = false
+  }
+}
+
 // 内置模版的名称与描述随界面语言变化（后端只给兜底文案）
 function tplName(tpl) {
   return tpl.builtin ? t('templateBuiltinName', settings.lang) : (tpl.name || tpl.id)
@@ -382,6 +409,26 @@ async function setDefault() {
               <div class="flex items-center justify-between gap-2 mb-3">
                 <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsTemplate', settings.lang) }}</div>
                 <div class="flex items-center gap-1.5">
+                  <!-- 复制选中模版：改自己的副本，原模版保持原样便于对照 -->
+                  <button
+                    class="h-7 px-2.5 rounded-lg border text-[12px] font-medium flex items-center gap-1.5"
+                    :style="{
+                      borderColor: 'var(--border)',
+                      color: canDuplicate ? 'var(--text)' : 'var(--text-dim)',
+                      background: 'transparent',
+                      cursor: canDuplicate && !copying ? 'pointer' : 'not-allowed',
+                      opacity: canDuplicate && !copying ? 1 : 0.45,
+                    }"
+                    :title="t('btnDuplicateTemplate', settings.lang)"
+                    :disabled="!canDuplicate || copying"
+                    @click="duplicateSelected"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+                      <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h1" />
+                    </svg>
+                    {{ t('btnDuplicateTemplate', settings.lang) }}
+                  </button>
                   <button
                     class="w-7 h-7 rounded-lg border flex items-center justify-center cursor-pointer"
                     :style="{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent', opacity: templatesLoading ? 0.5 : 1 }"
@@ -481,6 +528,7 @@ async function setDefault() {
               </div>
 
               <p class="mt-3 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('templateNote', settings.lang) }}</p>
+              <p v-if="copyHint" class="mt-1.5 text-[11px]" :style="{ color: copyFailed ? '#ef4444' : 'var(--accent)' }">{{ copyHint }}</p>
               <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
               <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
             </div>

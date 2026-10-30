@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 300" width="480" height="300" role="img" aria-label="技术文档模版预览">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fafbfc"/>
+      <stop offset="100%" stop-color="#eceef2"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="300" fill="url(#bg)"/>
+
+  <!-- 左侧固定目录栏 -->
+  <rect x="0" y="0" width="126" height="300" fill="#f2f4f7"/>
+  <line x1="126" y1="0" x2="126" y2="300" stroke="#dfe3e9"/>
+
+  <!-- 侧栏：品牌 + 文档标题 -->
+  <rect x="16" y="22" width="28" height="7" rx="3.5" fill="#2f6feb"/>
+  <rect x="16" y="38" width="72" height="6" rx="3" fill="#31363d"/>
+  <line x1="16" y1="58" x2="110" y2="58" stroke="#dfe3e9"/>
+
+  <!-- 侧栏：目录标签 + 条目（第 2 条为当前章节） -->
+  <rect x="16" y="74" width="22" height="4" rx="2" fill="#a9b0ba"/>
+  <rect x="16" y="88" width="70" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="10" y="102" width="106" height="17" rx="5" fill="rgba(47,111,235,0.12)"/>
+  <rect x="10" y="102" width="2.5" height="17" rx="1.25" fill="#2f6feb"/>
+  <rect x="18" y="108" width="58" height="5" rx="2.5" fill="#2f6feb"/>
+  <rect x="30" y="126" width="52" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="30" y="140" width="44" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="16" y="158" width="62" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="16" y="176" width="50" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="30" y="190" width="56" height="5" rx="2.5" fill="#c2c8d1"/>
+  <rect x="16" y="208" width="66" height="5" rx="2.5" fill="#c2c8d1"/>
+
+  <!-- 右侧正文：标题 + 段落 + 代码块 -->
+  <rect x="152" y="30" width="176" height="11" rx="3" fill="#1f2328"/>
+  <g fill="#c8ced7">
+    <rect x="152" y="58" width="286" height="5" rx="2.5"/>
+    <rect x="152" y="70" width="270" height="5" rx="2.5"/>
+    <rect x="152" y="82" width="282" height="5" rx="2.5"/>
+    <rect x="152" y="94" width="196" height="5" rx="2.5"/>
+  </g>
+  <rect x="152" y="118" width="108" height="8" rx="3" fill="#1f2328"/>
+  <line x1="152" y1="136" x2="438" y2="136" stroke="#e3e7ec"/>
+  <g fill="#c8ced7">
+    <rect x="152" y="148" width="286" height="5" rx="2.5"/>
+    <rect x="152" y="160" width="258" height="5" rx="2.5"/>
+  </g>
+
+  <!-- 代码块 -->
+  <rect x="152" y="180" width="286" height="62" rx="7" fill="#f6f8fa" stroke="#e3e7ec"/>
+  <g fill="#b6bec9">
+    <rect x="166" y="194" width="96" height="5" rx="2.5"/>
+    <rect x="178" y="208" width="132" height="5" rx="2.5"/>
+    <rect x="178" y="222" width="84" height="5" rx="2.5"/>
+  </g>
+
+  <g fill="#c8ced7">
+    <rect x="152" y="258" width="240" height="5" rx="2.5"/>
+    <rect x="152" y="270" width="212" height="5" rx="2.5"/>
+  </g>
+</svg>

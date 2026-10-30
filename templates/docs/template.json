@@ -1,0 +1,7 @@
+{
+  "name": "技术文档",
+  "description": "自带模版：左侧固定目录、右侧正文，滚动高亮当前章节，适合手册与说明文档",
+  "version": "1.0.0",
+  "author": "md2x",
+  "preview": "preview.svg"
+}
