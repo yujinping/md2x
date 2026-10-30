@@ -1,4 +1,4 @@
-## [unreleased]
+## [1.3.0] - 2026-10-30
 
 ### 🚀 Features
 
@@ -13,6 +13,10 @@
 ### 🧪 Testing
 
 - *(cdp)* 测试函数名改用 snake_case，clippy -D warnings 通过
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v1.3.0
 ## [1.2.0] - 2026-10-30
 
 ### 🚀 Features
