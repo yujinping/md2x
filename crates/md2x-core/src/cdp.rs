@@ -739,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn base64_解码遇到非法字符返回None() {
+    fn base64_解码遇到非法字符返回_none() {
         assert!(base64_decode("!!!").is_none());
     }
 
@@ -809,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn 提取ws地址_无则None() {
+    fn 提取ws地址_无则_none() {
         assert!(extract_ws_url(r#"{"type":"page"}"#).is_none());
     }
 
