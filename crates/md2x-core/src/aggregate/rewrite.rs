@@ -10,6 +10,9 @@ pub struct RewriteCtx<'a> {
     pub by_rel: &'a HashMap<String, String>,
     /// section id → 该文档的「规范化标题 → 真实锚点 id」表
     pub headings: &'a HashMap<String, HashMap<String, String>>,
+    /// 被用户排除的相对路径（文件或目录）。指向这些目标的链接按「未打包」处理：
+    /// 它们确实存在于磁盘上，但用户明确表示不放进产物，保留原 href 只会得到死链
+    pub excluded: &'a [String],
 }
 
 impl RewriteCtx<'_> {
@@ -25,6 +28,11 @@ impl RewriteCtx<'_> {
             // Hugo 风格绝对路径指向站点根，非仓库内相对路径
             || href.starts_with('/')
     }
+
+    /// 该根相对路径是否落在用户排除范围内
+    fn is_excluded(&self, rel: &str) -> bool {
+        super::collector::is_excluded(rel, self.excluded)
+    }
 }
 
 /// 重写 HTML 中的本地文档链接，使其在合并后的单页内跳转。
@@ -33,7 +41,12 @@ impl RewriteCtx<'_> {
 /// - 外部链接（http/https/mailto/data/file/绝对路径）原样保留；
 /// - 纯锚点 `#x` → 加上当前文档前缀，指向本文档内标题；
 /// - 本地 md 链接（可带 `./`、`../` 与 `#锚点`）→ 解析为文档间跳转；
-/// - 目标不存在或不是 md（图片、pdf 等）→ 原样保留，避免产出死链。
+/// - **本地非 md 链接**（pdf/xlsx/zip/drawio…）→ 单文件产物无法携带这些文件，
+///   保留 href 只会得到一条静默失效的死链。故整段替换为不可点击的提示，
+///   形如 `原文(相对路径)`，让读者明确知道少了哪个文件；
+/// - **指向被排除文档的链接**（用户右键排除了这篇）→ 同样改为未打包提示：
+///   目标在磁盘上确实存在，但产物里没有它，留着 href 就是死链；
+/// - 目标 md 不存在 → 原样保留，避免误伤尚未收集的文档。
 pub fn rewrite_links(html: &str, ctx: &RewriteCtx) -> String {
     let mut out = String::with_capacity(html.len());
     let mut pos = 0usize;
@@ -52,10 +65,81 @@ pub fn rewrite_links(html: &str, ctx: &RewriteCtx) -> String {
         };
 
         let tag = &html[tag_start..tag_end];
+
+        // 本地非 md 文件：需要把整个 <a>…</a> 换成不可点击的 span，
+        // 因此必须连闭合标签一起消费，不能只改 href
+        if let Some(rel) = missing_file_target(tag, ctx) {
+            if let Some(close) = html[tag_end..].find("</a>").map(|i| tag_end + i) {
+                let inner = html[tag_end..close].trim();
+                out.push_str(&missing_file_html(inner, &rel));
+                // 跳过 `</a>`
+                pos = close + "</a>".len();
+                continue;
+            }
+        }
+
         out.push_str(&rewrite_tag(tag, ctx));
         pos = tag_end;
     }
     out
+}
+
+/// 判断这个 `<a>` 是否指向「产物里没有的文件」，返回其**相对根目录**的路径。
+///
+/// 三类目标会命中：
+/// - 本地非 md 文件（pdf/xlsx…）：单文件产物本就带不走；
+/// - 被用户排除的 md 或目录内文档：磁盘上有，产物里没有；
+/// - 被用户排除的目录下的任意文件。
+///
+/// 用根相对路径而不是 href 原文：md 在子目录时 href 是相对该 md 所在目录的
+/// （`[源文件](md2x.drawio)` 只给出 `md2x.drawio`），读者无法据此判断文件在哪。
+fn missing_file_target(tag: &str, ctx: &RewriteCtx) -> Option<String> {
+    let (_, _, href) = find_href_attr(tag)?;
+    let raw = href.trim();
+    if raw.is_empty() || RewriteCtx::is_external(raw) {
+        return None;
+    }
+    // comrak 会对 href 做 percent-encoding，中文文件名必须解码后才能展示
+    let decoded = percent_decode(raw);
+    let path_part = match decoded.split_once('#') {
+        Some((p, _)) => p,
+        None => decoded.as_str(),
+    };
+    // 纯锚点交给 map_href 处理
+    if path_part.is_empty() {
+        return None;
+    }
+    let rel = super::collector::normalize_rel(ctx.self_dir, path_part);
+    // md 链接：只有目标被排除时才算缺失；正常收集到的交给 map_href
+    if is_markdown_path(path_part) {
+        return if ctx.is_excluded(&rel) { Some(rel) } else { None };
+    }
+    Some(rel)
+}
+
+/// 生成「文件未打包」的提示标记。
+///
+/// 保留作者写的链接文字（如「点这里下载」）在前，括号内补上相对路径，
+/// 读者既知道原本想指向什么，也能找到对应的源文件。
+fn missing_file_html(inner: &str, rel: &str) -> String {
+    let path = escape_text(rel);
+    if inner.is_empty() {
+        return format!(
+            r#"<span class="ext-missing"><span class="ext-missing-path">({})</span></span>"#,
+            path
+        );
+    }
+    format!(
+        r#"<span class="ext-missing">{}<span class="ext-missing-path">({})</span></span>"#,
+        inner, path
+    )
+}
+
+/// 最小转义：只处理会破坏 HTML 结构的字符
+fn escape_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// 从 `from` 起查找下一个 `<a` 标签的 `<` 位置，跳过 `<abbr` 之类前缀相同的标签
@@ -266,6 +350,7 @@ mod tests {
             self_dir: "",
             by_rel,
             headings,
+            excluded: &[],
         }
     }
 
@@ -361,7 +446,65 @@ mod tests {
     }
 
     #[test]
+    fn 本地非md文件转为不可点击提示() {
+        // 单文件产物无法携带 pdf，保留 href 只会得到静默失效的死链
+        let (b, h) = maps();
+        let c = ctx_fixture(&b, &h);
+        let out = rewrite_links("<a href=\"spec.pdf\">点这里下载</a>", &c);
+        assert!(!out.contains("<a "), "不应保留可点击链接: {out}");
+        assert!(out.contains("ext-missing"), "应带提示标记: {out}");
+        assert!(out.contains("点这里下载"), "应保留作者写的链接文字: {out}");
+        assert!(out.contains("(spec.pdf)"), "应给出文件名: {out}");
+    }
+
+    #[test]
+    fn 非md提示里的路径是相对根目录的() {
+        // md 在子目录时，href 原文只给出 `md2x.drawio`，看不出它在哪
+        let (b, h) = maps();
+        let mut c = ctx_fixture(&b, &h);
+        c.self_dir = "docs/arch";
+        let out = rewrite_links("<a href=\"md2x.drawio\">源文件</a>", &c);
+        assert!(
+            out.contains("(docs/arch/md2x.drawio)"),
+            "应显示相对根目录的完整路径: {out}"
+        );
+    }
+
+    #[test]
+    fn 非md提示能还原百分号编码的中文名() {
+        let (b, h) = maps();
+        let c = ctx_fixture(&b, &h);
+        let out = rewrite_links(
+            "<a href=\"%E8%A7%84%E8%8C%83.pdf\">规范</a>",
+            &c,
+        );
+        assert!(out.contains("(规范.pdf)"), "中文文件名应被解码: {out}");
+    }
+
+    #[test]
+    fn 外部链接不被当成缺失文件() {
+        let (b, h) = maps();
+        let c = ctx_fixture(&b, &h);
+        for href in ["https://example.com/a.pdf", "mailto:x@y.com", "/abs/a.pdf"] {
+            let html = format!("<a href=\"{}\">x</a>", href);
+            assert_eq!(rewrite_links(&html, &c), html, "{} 不应被改写", href);
+        }
+    }
+
+    #[test]
+    fn 缺失文件提示对尖括号做转义() {
+        // comrak 会把 href 里的尖括号百分号编码，故用 %3C/%3E 作为真实输入；
+        // 解码后若直接拼进 HTML 会破坏结构，必须转义成实体
+        let (b, h) = maps();
+        let c = ctx_fixture(&b, &h);
+        let out = rewrite_links("<a href=\"a%3Cb%3E.pdf\">x</a>", &c);
+        assert!(!out.contains("<b>"), "路径中的尖括号必须转义: {out}");
+        assert!(out.contains("&lt;b&gt;"), "应转义为实体: {out}");
+    }
+
+    #[test]
     fn 未聚合的文档保留原链接() {
+        // 目标 md 不在收集结果里：保留原样，避免误伤尚未纳入的文档
         let (b, h) = maps();
         let c = ctx_fixture(&b, &h);
         let html = "<a href=\"missing.md\">M</a>";
@@ -369,11 +512,63 @@ mod tests {
     }
 
     #[test]
-    fn 非md链接如图片保持原样() {
+    fn 指向被排除文档的链接转为未打包提示() {
+        // 被排除的文档磁盘上存在，但产物里没有它；保留 href 就是死链
+        let (b, h) = maps();
+        let excl = vec!["sub/b.md".to_string()];
+        let c = RewriteCtx {
+            self_prefix: "doc-0-",
+            self_dir: "",
+            by_rel: &b,
+            headings: &h,
+            excluded: &excl,
+        };
+        let out = rewrite_links("<a href=\"sub/b.md\">B</a>", &c);
+        assert!(!out.contains("<a "), "不应保留可点击链接: {out}");
+        assert!(out.contains("ext-missing"), "应带未打包标记: {out}");
+        assert!(out.contains("(sub/b.md)"), "应指出被排除的路径: {out}");
+    }
+
+    #[test]
+    fn 指向被排除目录内文档的链接同样转为提示() {
+        // 用户排除的是目录，不是逐个文件：后代要一并命中
+        let (b, h) = maps();
+        let excl = vec!["sub".to_string()];
+        let c = RewriteCtx {
+            self_prefix: "doc-0-",
+            self_dir: "",
+            by_rel: &b,
+            headings: &h,
+            excluded: &excl,
+        };
+        let out = rewrite_links("<a href=\"sub/b.md\">B</a>", &c);
+        assert!(out.contains("ext-missing"), "目录排除应递归命中: {out}");
+    }
+
+    #[test]
+    fn 未被排除的md链接仍走锚点改写() {
+        // 排除列表存在但不含该目标时，不能误伤正常改写
+        let (b, h) = maps();
+        let excl = vec!["other.md".to_string()];
+        let c = RewriteCtx {
+            self_prefix: "doc-0-",
+            self_dir: "",
+            by_rel: &b,
+            headings: &h,
+            excluded: &excl,
+        };
+        let out = rewrite_links("<a href=\"sub/b.md\">B</a>", &c);
+        assert_eq!(out, "<a href=\"#doc-1\">B</a>");
+    }
+
+    #[test]
+    fn 非md链接如图片转为缺失提示() {
+        // 设计变更：早期原样保留（等于死链），现改为明确告知「未打包」
         let (b, h) = maps();
         let c = ctx_fixture(&b, &h);
-        let html = "<a href=\"pic.png\">P</a>";
-        assert_eq!(rewrite_links(html, &c), html);
+        let out = rewrite_links("<a href=\"pic.png\">P</a>", &c);
+        assert!(out.contains("ext-missing"), "应转为缺失提示: {out}");
+        assert!(out.contains("(pic.png)"), "应给出路径: {out}");
     }
 
     #[test]

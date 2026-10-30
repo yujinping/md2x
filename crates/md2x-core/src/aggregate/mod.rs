@@ -29,7 +29,27 @@ struct RenderedDoc {
 /// 各篇之间以水平线分隔，标题层级原样保留。front matter 会被剥离，
 /// 避免第二篇之后出现重复的元数据块。
 pub fn concat_docs(root: &Path) -> Result<String, MpeError> {
-    let collected = collector::collect(root);
+    concat_docs_with_config(root, &[], &[])
+}
+
+/// 同 [`concat_docs`]，但接受用户自定义文档顺序。
+///
+/// `order` 为相对 `root` 的 `/` 分隔路径列表；空切片即默认顺序。
+/// DOCX 与 HTML/PDF 共用同一份顺序，避免「预览顺序和导出的 Word 不一致」。
+pub fn concat_docs_with_order(root: &Path, order: &[String]) -> Result<String, MpeError> {
+    concat_docs_with_config(root, order, &[])
+}
+
+/// 同 [`concat_docs_with_order`]，并接受被排除的路径。
+///
+/// 排除项在文件树里显示为灰色，导出时既不进产物，其被引用的链接也会
+/// 退化为「未打包」提示（见 [`rewrite`]）。
+pub fn concat_docs_with_config(
+    root: &Path,
+    order: &[String],
+    exclude: &[String],
+) -> Result<String, MpeError> {
+    let collected = collector::collect_with_config(root, order, exclude);
     let mut parts: Vec<String> = Vec::new();
     for doc in &collected.docs {
         let md = std::fs::read_to_string(&doc.path)?;
@@ -60,17 +80,52 @@ pub struct AggregateResult {
 ///
 /// `tpl` 为 None 时用内置默认模板；传入外部模板时缺少 `{{DOC_TREE}}`
 /// 占位符只会丢失文档树，不影响其余内容。
+///
+/// 文档顺序走默认规则（顶层 README 置顶 + 目录优先的深度优先拍平）；
+/// 需要自定义顺序或排除项时用 [`aggregate_folder_to_html_with_config`]。
 pub fn aggregate_folder_to_html(
     root: &Path,
     full_width: bool,
     theme: crate::template::Theme,
     tpl: Option<&template::HtmlTemplate>,
 ) -> Result<AggregateResult, MpeError> {
+    aggregate_folder_to_html_with_config(root, full_width, theme, tpl, &[], &[])
+}
+
+/// 同 [`aggregate_folder_to_html`]，但接受用户自定义文档顺序。
+///
+/// `order` 为相对 `root` 的 `/` 分隔路径列表；空切片即默认顺序，
+/// 未出现在 `order` 里的文档按默认规则排到后面
+/// （见 [`collector::collect_with_config`]）。
+pub fn aggregate_folder_to_html_with_order(
+    root: &Path,
+    full_width: bool,
+    theme: crate::template::Theme,
+    tpl: Option<&template::HtmlTemplate>,
+    order: &[String],
+) -> Result<AggregateResult, MpeError> {
+    aggregate_folder_to_html_with_config(root, full_width, theme, tpl, order, &[])
+}
+
+/// 聚合导出的完整入口：自定义顺序 + 排除项。
+///
+/// `exclude` 里的路径不参与聚合。要点在于**这些路径也不会进入 `by_rel`**，
+/// 于是指向它们的链接在 [`rewrite`] 里查不到目标，自然退回「未打包」提示——
+/// 与用户排除该文件的意图一致（他不希望这篇文档出现在产物里），
+/// 也不需要单独再写一条「指向被排除文档」的规则。
+pub fn aggregate_folder_to_html_with_config(
+    root: &Path,
+    full_width: bool,
+    theme: crate::template::Theme,
+    tpl: Option<&template::HtmlTemplate>,
+    order: &[String],
+    exclude: &[String],
+) -> Result<AggregateResult, MpeError> {
     if !root.is_dir() {
         return Err(MpeError::FileNotFound(root.to_string_lossy().to_string()));
     }
 
-    let collected = collector::collect(root);
+    let collected = collector::collect_with_config(root, order, exclude);
     if collected.docs.is_empty() {
         return Err(MpeError::FileNotFound(format!(
             "{} 内没有 Markdown 文件",
@@ -96,6 +151,7 @@ pub fn aggregate_folder_to_html(
             self_dir: &self_dir,
             by_rel: &collected.by_rel,
             headings: &heading_index,
+            excluded: exclude,
         };
         let fixed = rewrite::rewrite_links(&r.html, &ctx);
         body.push_str(&section_html(doc, &fixed));
