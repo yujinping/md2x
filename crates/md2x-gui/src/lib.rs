@@ -352,6 +352,53 @@ fn doc_order_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("doc-order.json"))
 }
 
+/// 「可渲染类型」配置的存档路径：`<app_data_dir>/render-types.json`。
+///
+/// 与排版存档同处一地：这是本机偏好，不该写进被导出的文档目录。
+fn render_types_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法定位应用数据目录: {e}"))?;
+    std::fs::create_dir_all(&base).map_err(|e| format!("创建应用数据目录失败: {e}"))?;
+    Ok(base.join("render-types.json"))
+}
+
+/// 读取可渲染类型配置；文件缺失或损坏时回落到内置默认值。
+///
+/// 损坏即默认而不是报错：这个配置只影响「文件树显示什么」，
+/// 让它把整个应用卡住是不划算的。
+fn load_render_types(app: &tauri::AppHandle) -> md2x_core::docsource::TypeMap {
+    let Ok(p) = render_types_path(app) else {
+        return md2x_core::docsource::TypeMap::default();
+    };
+    let Ok(raw) = std::fs::read_to_string(&p) else {
+        return md2x_core::docsource::TypeMap::default();
+    };
+    #[derive(Deserialize)]
+    struct Stored {
+        rules: Vec<md2x_core::docsource::TypeRule>,
+    }
+    serde_json::from_str::<Stored>(&raw)
+        .map(|s| md2x_core::docsource::TypeMap::from_rules(s.rules))
+        .unwrap_or_default()
+}
+
+/// 写入可渲染类型配置。
+fn save_render_types(
+    app: &tauri::AppHandle,
+    map: &md2x_core::docsource::TypeMap,
+) -> Result<(), String> {
+    let p = render_types_path(app)?;
+    #[derive(Serialize)]
+    struct Stored {
+        rules: Vec<md2x_core::docsource::TypeRule>,
+    }
+    let raw = serde_json::to_string_pretty(&Stored { rules: map.rules() })
+        .map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&p, raw).map_err(|e| format!("写入失败: {e}"))
+}
+
 /// 读取全部排版存档：`{ "<文件夹绝对路径>": { order, exclude } }`。
 ///
 /// 读取失败一律当作「没有自定义」——存档损坏不该让导出失败，
@@ -519,6 +566,10 @@ struct TreeNode {
     /// 是否被用户排除：树里显示为灰色，导出时不参与。
     /// 目录被排除时其子节点也一律为 true——父节点标记本身就代表整棵子树
     excluded: bool,
+    /// 该文件用哪个渲染器（`markdown` / `dbml` / `plain_text`）。
+    /// 目录为空串。前端据此换图标、决定右键菜单里出现哪些导出项，
+    /// 不必在前端再维护一份「扩展名 → 类型」的映射副本。
+    renderer: String,
 }
 
 struct CachedPreview {
@@ -975,6 +1026,11 @@ pub fn run() {
             check_external_tools,
             repo_relative_path,
             copy_text,
+            export_markdown,
+            get_render_types,
+            set_render_types,
+            list_renderers,
+            get_renderer_for_file,
         ])
         .build(tauri::generate_context!())
         .expect("error")
@@ -1580,20 +1636,25 @@ fn get_html(
     }
 
     // 缓存未命中，重新生成 HTML
+    // 按扩展名分派渲染器：md → comrak，dbml → 数据字典+画布，
+    // 二者都产出 body 片段后交给同一个模版，配色随模版走。
+    let types = load_render_types(&app);
+    let renderer = types.renderer_for(&p).ok_or_else(|| {
+        format!(
+            "不支持的文件类型：{}（可在设置 → 渲染类型 中添加）",
+            p.extension().and_then(|e| e.to_str()).unwrap_or("无扩展名")
+        )
+    })?;
     let md = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
-    let is_skill = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|n| n == "SKILL.md")
-        .unwrap_or(false);
+    let is_skill = renderer == md2x_core::docsource::Renderer::Markdown
+        && p.file_name().and_then(|s| s.to_str()) == Some("SKILL.md");
     let (metadata, body_md) = if is_skill {
         converter::parse_front_matter(&md)
     } else {
         (None, &md[..])
     };
-    let hb =
-        converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
-    let hb = converter::resolve_image_srcs(&hb, &p);
+    let hb = converter::render_body_by_renderer(renderer, body_md, Some(&p))
+        .map_err(|e| e.to_string())?;
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
     let fh = template::render_html_template_with_metadata(&hb, t, metadata.as_ref(), full_width, theme);
 
@@ -1734,28 +1795,46 @@ fn save_pdf_as(src: String, dst: String) -> Result<(), String> {
 }
 
 /// 渲染完整 HTML（含模板、图片内嵌、SKILL 元数据），供导出命令复用。
+///
+/// 按文件扩展名分派到对应渲染器后再统一套模版：
+/// md 走 comrak，dbml 走数据字典+画布，二者产物都是 HTML body 片段，
+/// 于是模版、配色、明暗主题、PDF 导出链路对两者完全共用一套。
 fn render_full_html(
     p: &Path,
     full_width: bool,
     theme: template::Theme,
     tpl: &template::HtmlTemplate,
+    types: &md2x_core::docsource::TypeMap,
 ) -> Result<String, String> {
+    let renderer = types.renderer_for(p).ok_or_else(|| {
+        format!(
+            "不支持的文件类型：{}（可在设置 → 渲染类型 中添加）",
+            p.extension().and_then(|e| e.to_str()).unwrap_or("无扩展名")
+        )
+    })?;
     let md = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
-    let is_skill = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|n| n == "SKILL.md")
-        .unwrap_or(false);
-    let (metadata, body_md) = if is_skill {
+
+    // SKILL.md 的 frontmatter 只在 Markdown 场景有意义：
+    // DBML / 纯文本里 `---` 不是元数据分隔符，强行解析会把正文切掉一截。
+    let (metadata, body_text) = if renderer == md2x_core::docsource::Renderer::Markdown
+        && p.file_name().and_then(|s| s.to_str()) == Some("SKILL.md")
+    {
         converter::parse_front_matter(&md)
     } else {
         (None, &md[..])
     };
-    let hb =
-        converter::convert_markdown_to_html_with_mermaid(body_md).map_err(|e| e.to_string())?;
-    let hb = converter::resolve_image_srcs(&hb, p);
+
+    let hb = converter::render_body_by_renderer(renderer, body_text, Some(p))
+        .map_err(|e| e.to_string())?;
     let t = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
-    Ok(template::render_html_with(tpl, &hb, t, metadata.as_ref(), full_width, theme))
+    Ok(template::render_html_with(
+        tpl,
+        &hb,
+        t,
+        metadata.as_ref(),
+        full_width,
+        theme,
+    ))
 }
 
 /// 列出可用模版：内置一项 + 模版目录自动扫描结果。
@@ -1989,26 +2068,47 @@ fn check_external_tools() -> Vec<ext_diagram::ToolStatus> {
 }
 
 /// 导出 HTML 到用户指定位置
+///
+/// `path` 为空时取当前打开的文件；文件树右键导出别的文件时显式传入。
 #[tauri::command(rename_all = "camelCase")]
 fn export_html(
     dst: String,
     full_width: Option<bool>,
     theme: Option<String>,
     template_id: Option<String>,
+    path: Option<String>,
     app: tauri::AppHandle,
     s: State<AppState>,
 ) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
     let tpl = load_selected_template(&app, &template_id);
-    let cur = s.current_file.lock().map_err(|e| e.to_string())?;
-    let p = cur
-        .as_ref()
-        .ok_or_else(|| "没有打开文件".to_string())?
-        .clone();
-    drop(cur);
-    let html = render_full_html(&p, full_width, theme, &tpl)?;
+    let p = export_target(path, &s)?;
+    let types = load_render_types(&app);
+    let html = render_full_html(&p, full_width, theme, &tpl, &types)?;
     std::fs::write(&dst, html).map_err(|e| format!("导出失败: {e}"))?;
+    Ok(())
+}
+
+/// 导出当前文档的 Markdown 到用户指定位置。
+///
+/// 用途：
+/// - DBML → 数据字典式 Markdown（这是主要场景：schema 进 git 做评审）；
+/// - Markdown → 原样复制（提供统一入口，前端不必判断类型）。
+///
+/// 注意与 `export_docx` 的区别：DOCX 走 `dbml → md → docx` 内存中转，
+/// 不落盘中间文件；这里是把 Markdown **作为最终产物**交给用户。
+#[tauri::command]
+fn export_markdown(
+    dst: String,
+    path: Option<String>,
+    app: tauri::AppHandle,
+    s: State<AppState>,
+) -> Result<(), String> {
+    let p = export_target(path, &s)?;
+    let types = load_render_types(&app);
+    let text = document_markdown(&p, &types)?;
+    std::fs::write(&dst, text).map_err(|e| format!("导出失败: {e}"))?;
     Ok(())
 }
 
@@ -2095,25 +2195,24 @@ fn export_folder_html(
 }
 
 /// 导出 PDF 到用户指定位置
+///
+/// `path` 为空时取当前打开的文件；文件树右键导出别的文件时显式传入。
 #[tauri::command(rename_all = "camelCase")]
 fn export_pdf(
     dst: String,
     full_width: Option<bool>,
     theme: Option<String>,
     template_id: Option<String>,
+    path: Option<String>,
     app: tauri::AppHandle,
     s: State<AppState>,
 ) -> Result<(), String> {
     let full_width = full_width.unwrap_or(false);
     let theme = theme_arg::parse_opt(&theme);
     let tpl = load_selected_template(&app, &template_id);
-    let cur = s.current_file.lock().map_err(|e| e.to_string())?;
-    let p = cur
-        .as_ref()
-        .ok_or_else(|| "没有打开文件".to_string())?
-        .clone();
-    drop(cur);
-    let html = render_full_html(&p, full_width, theme, &tpl)?;
+    let p = export_target(path, &s)?;
+    let types = load_render_types(&app);
+    let html = render_full_html(&p, full_width, theme, &tpl, &types)?;
     let d = std::env::temp_dir().join("rust-mpe-browser");
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     let hp = d.join("export-tmp.html");
@@ -2123,16 +2222,69 @@ fn export_pdf(
     Ok(())
 }
 
-/// 导出 DOCX 到用户指定位置（纯 Rust 生成，不依赖 Office）
-#[tauri::command]
-fn export_docx(dst: String, s: State<AppState>) -> Result<(), String> {
+/// 把任意受支持文档转成其等价的 Markdown 文本。
+///
+/// 这是「短路转换」的实现点：DBML 不需要先落盘一份 .md 再交给下游，
+/// 而是在内存里直接转成 Markdown 字符串——中间产物不产生任何文件。
+///
+/// - Markdown：原样返回（调用方可能是为了统一入口）；
+/// - DBML：转数据字典式 Markdown；
+/// - 纯文本：包成围栏代码块，保证 Markdown 下游不会把内容当成结构解析。
+///
+/// `types` 必须是**用户配置的那一份**：若在这里退回 `TypeMap::default()`，
+/// 用户在设置里把 `.txt` 映射到 Markdown 后，预览按新映射渲染、
+/// 导出 DOCX 却按默认映射判定为纯文本，两条链路就会产出不同内容。
+fn document_markdown(
+    p: &Path,
+    types: &md2x_core::docsource::TypeMap,
+) -> Result<String, String> {
+    let renderer = types.renderer_for(p).ok_or_else(|| {
+        format!(
+            "不支持的文件类型：{}（可在设置 → 渲染类型 中添加）",
+            p.extension().and_then(|e| e.to_str()).unwrap_or("无扩展名")
+        )
+    })?;
+    let text = std::fs::read_to_string(p).map_err(|e| format!("读取失败: {e}"))?;
+    let title = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
+    Ok(md2x_core::docsource::to_markdown(renderer, &text, title))
+}
+
+/// 解析导出目标：显式传入的路径优先（文件树右键导出未打开的文件），
+/// 否则退回「当前打开的文件」。
+///
+/// 两处入口共用同一套导出实现，避免「右键导出」与「工具栏导出」
+/// 各写一条链路后行为分叉（例如一边带 SKILL 元数据、另一边不带）。
+fn export_target(
+    path: Option<String>,
+    s: &State<AppState>,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(p) = path {
+        if p.trim().is_empty() {
+            return Err("导出路径为空".to_string());
+        }
+        return Ok(std::path::PathBuf::from(p));
+    }
     let cur = s.current_file.lock().map_err(|e| e.to_string())?;
-    let p = cur
-        .as_ref()
-        .ok_or_else(|| "没有打开文件".to_string())?
-        .clone();
-    drop(cur);
-    let md = std::fs::read_to_string(&p).map_err(|e| format!("读取失败: {e}"))?;
+    cur.as_ref().cloned().ok_or_else(|| "没有打开文件".to_string())
+}
+
+/// 导出 DOCX 到用户指定位置（纯 Rust 生成，不依赖 Office）
+///
+/// DBML 走 `dbml → Markdown（内存） → DOCX`：DOCX 生成器已能正确渲染
+/// Markdown 表格，复用比另写一套 OOXML 表格生成划算得多，
+/// 且两条链路产出的表格样式天然一致。
+///
+/// `path` 为空时取当前打开的文件；文件树右键导出别的文件时显式传入。
+#[tauri::command]
+fn export_docx(
+    dst: String,
+    path: Option<String>,
+    app: tauri::AppHandle,
+    s: State<AppState>,
+) -> Result<(), String> {
+    let p = export_target(path, &s)?;
+    let types = load_render_types(&app);
+    let md = document_markdown(&p, &types)?;
     md2x_core::docx::convert_markdown_to_docx(&md, &p, Path::new(&dst))
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -2192,6 +2344,112 @@ fn save_folder_layout(
     write_layout_store(&app, &store)
 }
 
+// ==================== 渲染类型配置 ====================
+
+/// 一条渲染类型规则（设置界面读写共用）。
+///
+/// 同时实现 Serialize 与 Deserialize：既作为 `get_render_types` 的返回值，
+/// 也作为 `set_render_types` 的入参——两侧用同一个结构，
+/// 免得「读回来的字段」和「写回去的字段」各定义一份后悄悄错位。
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TypeRuleInfo {
+    /// 扩展名（不带点）
+    ext: String,
+    /// 渲染器标识串
+    renderer: String,
+    /// 渲染器展示名（兜底，前端通常按 id 走 i18n）
+    #[serde(default)]
+    renderer_label: String,
+    /// 是否启用
+    #[serde(default = "default_enabled")]
+    enabled: bool,
+}
+
+/// 缺省为启用：前端只传 ext + renderer 时视为要新增一条可用规则。
+fn default_enabled() -> bool {
+    true
+}
+
+/// 可选的渲染器清单，供设置界面渲染下拉框。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RendererInfo {
+    /// 标识串
+    id: String,
+    /// 展示名
+    label: String,
+    /// 是否支持导出 DOCX（前端据此决定菜单项显隐）
+    supports_docx: bool,
+}
+
+/// 读取当前的可渲染类型配置。
+#[tauri::command]
+fn get_render_types(app: tauri::AppHandle) -> Vec<TypeRuleInfo> {
+    load_render_types(&app)
+        .rules()
+        .into_iter()
+        .map(|r| TypeRuleInfo {
+            ext: r.ext,
+            renderer: r.renderer.id().to_string(),
+            renderer_label: r.renderer.label().to_string(),
+            enabled: r.enabled,
+        })
+        .collect()
+}
+
+/// 列出全部内置渲染器（供设置界面下拉框）。
+#[tauri::command]
+fn list_renderers() -> Vec<RendererInfo> {
+    md2x_core::docsource::Renderer::all()
+        .iter()
+        .map(|r| RendererInfo {
+            id: r.id().to_string(),
+            label: r.label().to_string(),
+            supports_docx: r.supports_docx(),
+        })
+        .collect()
+}
+
+/// 保存可渲染类型配置。
+///
+/// 保存后不主动重扫文件树：前端会接着调 `open_folder` 重新拉一次，
+/// 那样「树上看到的」与「配置里存的」立刻一致，不需要在两处各算一遍。
+#[tauri::command]
+fn set_render_types(app: tauri::AppHandle, rules: Vec<TypeRuleInfo>) -> Result<(), String> {
+    use md2x_core::docsource::{Renderer, TypeMap, TypeRule};
+    let mut out = Vec::with_capacity(rules.len());
+    for r in rules {
+        let renderer = Renderer::from_id(&r.renderer)
+            .ok_or_else(|| format!("未知的渲染器: {}", r.renderer))?;
+        out.push(TypeRule {
+            ext: r.ext,
+            renderer,
+            enabled: r.enabled,
+        });
+    }
+    save_render_types(&app, &TypeMap::from_rules(out))?;
+    // 类型映射变了，同一份文件可能要用另一种渲染器产出完全不同的 HTML：
+    // 缓存只按 mtime / 模版判定，不感知映射变化，必须在这里主动清掉，
+    // 否则改完设置回头看预览，看到的还是旧渲染结果（像是设置没生效）。
+    if let Some(s) = app.try_state::<AppState>() {
+        if let Ok(mut c) = s.cached_preview.lock() {
+            *c = None;
+        }
+    }
+    Ok(())
+}
+
+/// 当前打开文件对应的渲染器（前端据此决定显示哪些导出项）。
+#[tauri::command]
+fn get_renderer_for_file(app: tauri::AppHandle, s: State<AppState>) -> Option<String> {
+    let cur = s.current_file.lock().ok()?;
+    let p = cur.as_ref()?;
+    load_render_types(&app)
+        .renderer_for(p)
+        .map(|r| r.id().to_string())
+}
+
 /// 清空当前打开的文件（切换文件夹卸载旧预览时用），回到无文件初始状态
 #[tauri::command]
 fn clear_file(s: State<AppState>, window: tauri::WebviewWindow) -> Result<(), String> {
@@ -2226,7 +2484,8 @@ fn open_folder(
     *s.folder_root.lock().map_err(|e| e.to_string())? = Some(p.clone());
     apply_window_title(&window, &s);
     let layout = load_layout(&app, &p);
-    scan_tree(&p, &p, &layout)
+    let types = load_render_types(&app);
+    scan_tree(&p, &p, &layout, &types)
 }
 
 /// 关闭文件夹：回到单文件视图
@@ -2260,19 +2519,25 @@ fn path_kind(path: String) -> String {
     }
 }
 
-/// 递归扫描目录内 Markdown 文件树。
+/// 递归扫描目录内可渲染的文件树。
 ///
 /// 排序与排除都交给 `collector::SiblingOrder` / `collector::is_excluded`：
 /// 树只负责「长什么样」，顺序与排除的**规则**留在 core 一处，导出侧用同一个
 /// 比较器拍平同一棵树，于是「树上看到的顺序」与「导出产物的顺序」恒等。
 ///
 /// `layout` 为空时即为纯粹的默认视图，与用户从未动过拖动的状态一致。
-fn scan_tree(dir: &Path, root: &Path, layout: &FolderLayout) -> Result<Vec<TreeNode>, String> {
+/// `types` 决定「哪些扩展名算可渲染」——由设置界面配置，默认 md/markdown/dbml。
+fn scan_tree(
+    dir: &Path,
+    root: &Path,
+    layout: &FolderLayout,
+    types: &md2x_core::docsource::TypeMap,
+) -> Result<Vec<TreeNode>, String> {
     let ord = md2x_core::aggregate::collector::SiblingOrder::new(
         &layout.order,
         md2x_core::aggregate::collector::top_readme_rel(root),
     );
-    scan_dir(dir, root, layout, &ord, 0)
+    scan_dir(dir, root, layout, &ord, types, 0)
 }
 
 fn scan_dir(
@@ -2280,6 +2545,7 @@ fn scan_dir(
     root: &Path,
     layout: &FolderLayout,
     ord: &md2x_core::aggregate::collector::SiblingOrder,
+    types: &md2x_core::docsource::TypeMap,
     depth: usize,
 ) -> Result<Vec<TreeNode>, String> {
     let rd = std::fs::read_dir(dir).map_err(|e| format!("读取文件夹失败: {e}"))?;
@@ -2305,9 +2571,9 @@ fn scan_dir(
             let children = if excluded_self || depth > 12 {
                 Vec::new()
             } else {
-                scan_dir(&path, root, layout, ord, depth + 1)?
+                scan_dir(&path, root, layout, ord, types, depth + 1)?
             };
-            // 剪除不含任何 .md 的空目录（被排除的目录保留，让用户能看见并取消）
+            // 剪除不含任何可渲染文件的空目录（被排除的目录保留，让用户能看见并取消）
             if children.is_empty() && !excluded_self {
                 continue;
             }
@@ -2319,9 +2585,10 @@ fn scan_dir(
                     is_dir: true,
                     children,
                     excluded: excluded_self,
+                    renderer: String::new(),
                 },
             ));
-        } else if ft.is_file() && is_markdown(&name) {
+        } else if ft.is_file() && types.is_supported(&path) {
             items.push((
                 rel,
                 TreeNode {
@@ -2330,18 +2597,17 @@ fn scan_dir(
                     is_dir: false,
                     children: Vec::new(),
                     excluded: excluded_self,
+                    renderer: types
+                        .renderer_for(&path)
+                        .map(|r| r.id().to_string())
+                        .unwrap_or_default(),
                 },
             ));
         }
-        // 符号链接不追踪，避免循环；指向 .md 的链接按非目录跳过
+        // 符号链接不追踪，避免循环；指向文件的链接按非目录跳过
     }
     items.sort_by(|a, b| ord.cmp((&a.0, a.1.is_dir), (&b.0, b.1.is_dir)));
     Ok(items.into_iter().map(|(_, n)| n).collect())
-}
-
-/// 是否 Markdown 文件（.md 后缀）
-fn is_markdown(name: &str) -> bool {
-    name.to_ascii_lowercase().ends_with(".md")
 }
 
 /// 路径统一为 / 分隔（跨平台比较、拼接用）
@@ -2788,9 +3054,9 @@ mod tests {
         assert_eq!(menu_export_request("about"), None);
     }
 
-    /// 仅收集 .md（忽略大小写），剪除不含 Markdown 的目录，目录优先排序
+    /// 仅收集类型表内可渲染的文件（忽略大小写），剪除不含可渲染文件的目录
     #[test]
-    fn scan_tree_collects_only_md_and_prunes_empty_dirs() {
+    fn scan_tree_collects_only_renderable_and_prunes_empty_dirs() {
         let d = std::env::temp_dir().join(format!("md2x-scan-test-{}", std::process::id()));
         let sub = d.join("sub");
         std::fs::create_dir_all(sub.join("empty")).unwrap();
@@ -2799,7 +3065,13 @@ mod tests {
         std::fs::write(sub.join("skip.txt"), "x").unwrap();
         std::fs::write(d.join("top.md"), "# top").unwrap();
 
-        let tree = scan_tree(&d, &d, &FolderLayout::default()).unwrap();
+        let tree = scan_tree(
+            &d,
+            &d,
+            &FolderLayout::default(),
+            &md2x_core::docsource::TypeMap::default(),
+        )
+        .unwrap();
         // 未排序时目录在前、文件在后；skip.txt 与空目录 empty 均被剪除
         assert_eq!(tree.len(), 2);
         assert!(tree[0].is_dir);
@@ -2811,6 +3083,30 @@ mod tests {
         assert_eq!(tree[1].name, "top.md");
         // 路径统一使用 / 分隔符
         assert!(!tree[0].path.contains('\\'));
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 拖文件夹进来时，默认类型表内的 .dbml 应被自动收录
+    #[test]
+    fn scan_tree_includes_dbml_by_default() {
+        let d = std::env::temp_dir().join(format!("md2x-scan-dbml-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("schema.dbml"), "Table t { id int [pk] }").unwrap();
+        std::fs::write(d.join("readme.md"), "# r").unwrap();
+        std::fs::write(d.join("data.json"), "{}").unwrap();
+
+        let tree = scan_tree(
+            &d,
+            &d,
+            &FolderLayout::default(),
+            &md2x_core::docsource::TypeMap::default(),
+        )
+        .unwrap();
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"schema.dbml"), "dbml 应被收录: {names:?}");
+        assert!(names.contains(&"readme.md"));
+        assert!(!names.contains(&"data.json"), "未登记类型应被过滤");
 
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -3132,7 +3428,7 @@ mod tests {
         // 树里从上到下的读法，必须与聚合产物里 doc-0、doc-1… 的顺序一致
         let d = tree_fixture("tree-vs-collect");
         let layout = FolderLayout::default();
-        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let tree = scan_tree(&d, &d, &layout, &md2x_core::docsource::TypeMap::default()).unwrap();
         let from_tree = flatten(&tree, &d);
         let collected = md2x_core::aggregate::collector::collect_with_config(&d, &[], &[]);
         let from_collect: Vec<String> = collected
@@ -3161,7 +3457,7 @@ mod tests {
             ],
             exclude: Vec::new(),
         };
-        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let tree = scan_tree(&d, &d, &layout, &md2x_core::docsource::TypeMap::default()).unwrap();
         let from_tree = flatten(&tree, &d);
         let collected =
             md2x_core::aggregate::collector::collect_with_config(&d, &layout.order, &[]);
@@ -3186,7 +3482,7 @@ mod tests {
             order: Vec::new(),
             exclude: vec!["sub".to_string()],
         };
-        let tree = scan_tree(&d, &d, &layout).unwrap();
+        let tree = scan_tree(&d, &d, &layout, &md2x_core::docsource::TypeMap::default()).unwrap();
         let sub = tree.iter().find(|n| n.name == "sub").expect("被排除的目录仍在树里");
         assert!(sub.excluded, "应标记为已排除（前端置灰）");
         // 排除是继承的，不必把每个子文件都写进列表
@@ -3257,5 +3553,68 @@ mod tests {
         // 完全没有存档时全部取默认
         let plain = var_infos(&vars, None);
         assert_eq!(plain[0].value, "#2f6feb");
+    }
+
+    /// GUI 打开 DBML 的整条链路必须走「dbml → html」短路，且产物自包含。
+    ///
+    /// 断言的是最终 HTML 而不是中间片段：模版注入、配色变量、外部资源
+    /// 都是在这一步定型的。此前只用 CLI 验证过产物，GUI 这条分支
+    /// （多一层 TypeMap 与模版选择）一直没被覆盖。
+    #[test]
+    fn gui_renders_dbml_to_self_contained_html() {
+        use md2x_core::docsource::TypeMap;
+
+        let d = std::env::temp_dir().join(format!("md2x-gui-dbml-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("schema.dbml");
+        std::fs::write(
+            &f,
+            "Project demo {\n  Note: \'\'\'\n    存放 **API Key**。\n    \'\'\'\n}\n\
+             Table users {\n  id int [pk, note: \'主键\']\n  name varchar\n}",
+        )
+        .unwrap();
+
+        let html = render_full_html(
+            &f,
+            false,
+            template::Theme::Light,
+            &template::HtmlTemplate::builtin(),
+            &TypeMap::default(),
+        )
+        .expect("DBML 应能渲染");
+
+        // 数据字典表格与画布都在（正文内 Tab 切换）
+        assert!(html.contains("dx-cols"), "缺少数据字典表: 长度 {}", html.len());
+        assert!(html.contains("users"), "缺少表名");
+        assert!(html.contains("主键"), "字段备注丢失");
+        // note 的行内格式必须在 GUI 侧同样成立（dedent 生效）
+        assert!(html.contains("<strong>API Key</strong>"), "note 粗体未渲染");
+        // 自包含：不得有任何外部资源引用
+        assert!(!html.contains("src=\"http"), "不应有外部脚本/图片");
+        assert!(!html.contains("href=\"http"), "不应有外部样式");
+        // 用的是统一模版：CSS 变量体系必须存在，配色才能跟随模版
+        assert!(html.contains("--accent"), "模版配色变量缺失");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 类型表里没有的扩展名，GUI 渲染要给出可操作的错误而不是 panic。
+    #[test]
+    fn gui_rejects_unsupported_extension() {
+        use md2x_core::docsource::TypeMap;
+        let d = std::env::temp_dir().join(format!("md2x-gui-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("a.json");
+        std::fs::write(&f, "{}").unwrap();
+        let err = render_full_html(
+            &f,
+            false,
+            template::Theme::Light,
+            &template::HtmlTemplate::builtin(),
+            &TypeMap::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("不支持的文件类型"), "错误信息应可操作: {err}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
