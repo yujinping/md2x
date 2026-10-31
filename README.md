@@ -1,6 +1,6 @@
 # md2x
 
-md2x 是一个将 Markdown 文件转换为精美文档的工具，支持 PDF、HTML、PNG、DOCX 等输出格式，同时提供命令行（CLI）和桌面应用（GUI）两种使用方式。输出格式采用可扩展架构，新增格式只需扩展格式枚举与转换分支。
+md2x 是一个将 Markdown **与 DBML** 转换为精美文档的工具，支持 PDF、HTML、PNG、DOCX 等输出格式，同时提供命令行（CLI）和桌面应用（GUI）两种使用方式。输出格式采用可扩展架构，新增格式只需扩展格式枚举与转换分支；输入格式同样可扩展，见「DBML 数据库设计文件」与设置中的「渲染类型」。
 
 ## 项目结构
 
@@ -8,7 +8,7 @@ md2x 是一个将 Markdown 文件转换为精美文档的工具，支持 PDF、H
 md2x-project/
 ├── Cargo.toml                 # 工作区根配置
 ├── crates/
-│   ├── md2x-core/           # 核心库：Markdown→HTML→PDF 转换引擎
+│   ├── md2x-core/           # 核心库：Markdown / DBML → HTML → PDF 转换引擎
 │   ├── md2x-cli/            # CLI 二进制入口
 │   └── md2x-gui/            # Tauri 2 桌面应用后端
 ├── frontend/                  # Vue 3 + Pinia + Tailwind 前端
@@ -36,7 +36,32 @@ cargo run -p md2x-cli -- README.md --format docx  # 生成 README.docx（可编�
 cargo run -p md2x-cli -- README.md --preview      # 生成 PDF 并用默认应用打开
 cargo run -p md2x-cli -- README.md --format html --template my-theme/  # 指定模板包目录
 cargo run -p md2x-cli -- README.md --format html --template my-theme/ --var accent=#e11d48  # 覆盖模版变量
+cargo run -p md2x-cli -- schema.dbml --format html  # DBML -> HTML（数据字典 + 可缩放 Schema 画布）
+cargo run -p md2x-cli -- schema.dbml --format docx  # DBML -> DOCX（字段表 + 备注）
 ```
+
+### DBML 数据库设计文件
+
+md2x 原生识别 [DBML](https://dbml.dbdiagram.io)（Database Markup Language），把一份 `.dbml` 直接渲染成文档，产出**单个自包含 HTML**（CSS / JS / SVG 全部内联，零外部请求，可直接发出去或进 git）。
+
+一份 DBML 会产出三个视图，正文内 Tab 切换：
+
+| Tab | 内容 |
+|---|---|
+| **数据字典** | 每张表一张卡片，7 列字段表：字段 / 类型 / 约束（PK·UQ·NN·INC）/ 可空 / 默认值 / 外键 / 说明；表备注在卡片头，索引附在卡片尾 |
+| **Schema 画布** | 表按关系自动布局的内联 SVG，每个字段前标注 **PK / FK / UQ** 徽章（红 / 绿 / 紫），支持滚轮缩放、拖拽平移、表名搜索、点击定位；「适应窗口」带 60% 可读下限，不把字缩成一团 |
+| **引用关系** | 全部 `Ref` 的表格清单，含 ON DELETE / ON UPDATE |
+
+配色跟随所选 HTML 模版：模板变量（`--accent`、`--bg`、`--fg`…）改一处，数据字典、画布、引用表同时变化，深浅色主题一并生效。
+
+**链路短路**：DBML → HTML 是直连的，不经过中间 Markdown；导出 DOCX 时在内存里转成数据字典式 Markdown 再交给 Word 生成器，**中间文件不落盘**。同一份源在 GUI 预览、`--format docx`、右键导出 Markdown 三条路径上产出一致。
+
+**在 GUI 里用**：
+
+- 拖入文件夹时自动过滤出可渲染文件，DBML 文件在文件树里用三层圆柱图标区分
+- 点击即渲染，无需先转 Markdown
+- **右键**可导出 Markdown / HTML / PDF / DOCX，且不必先打开该文件
+- 设置 → **渲染类型** 里可手工增删扩展名映射（内置 `md` / `markdown` / `dbml`，可再加 `.txt`、`.sql` 等并指定用哪个内置渲染器）
 
 ### 全局安装（推荐）
 
@@ -60,8 +85,10 @@ cd .. && cargo run -p md2x-gui
 
 桌面应用支持：
 
-- **单文件预览**：打开 / 拖入 `.md` 文件，HTML 即时预览，可导出 PDF、HTML、DOCX
-- **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部 `.md` 文件，支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
+- **单文件预览**：打开 / 拖入 `.md`、`.dbml` 等受支持文件，HTML 即时预览，可导出 PDF、HTML、DOCX、Markdown
+- **文件夹文件树**：`打开文件夹`（或 `Cmd/Ctrl+Shift+O`）后，左侧显示该目录及其子目录内全部**可渲染文件**（按「渲染类型」配置过滤），支持展开 / 收起与关闭；可直接把文件夹拖入窗口打开
+- **按类型渲染**：`.md` 按 Markdown 渲染，`.dbml` 直接渲染为数据字典 + Schema 画布（不中转 Markdown）；扩展名与渲染器的映射可在设置 → 渲染类型中增删
+- **右键导出**：文件树中右键任意文件即可导出 Markdown / HTML / PDF / DOCX，无需先打开该文件
 - **默认视图**：可在设置中配置启动视图（单文件视图 / 文件夹树视图 / 自动）
 - **HTML 模板**：预览与导出使用同一套模板。模板以「目录包」形式组织，放入模板目录（设置 → 导出 → 打开模板目录）后自动扫描加载，卡片式选择并记住所选模版；模版可声明可调变量（配色/字号/字体），设置面板直接改、即时预览；CLI 用 `--template <目录|文件>` 指定，`--var key=value` 覆盖变量
 - **导出预设**：把常用的「格式 + 模版 + 主题 + 全宽」存成一条（如「发周报」「交审 PDF」），之后从菜单 文件 → 导出 一键触发；预设存本机，模版变量按模版 id 跟随生效
