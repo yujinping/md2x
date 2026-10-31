@@ -122,24 +122,36 @@ fn run() -> Result<(), error::MpeError> {
         return Ok(());
     }
 
-    // 读取 Markdown
-    let markdown = std::fs::read_to_string(path).map_err(error::MpeError::IoError)?;
+    // 读取源文件
+    let source = std::fs::read_to_string(path).map_err(error::MpeError::IoError)?;
 
-    // 检测是否为 SKILL.md
-    let is_skill = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(|n| n == "SKILL.md")
-        .unwrap_or(false);
-    let (metadata, body_md) = if is_skill {
-        converter::parse_front_matter(&markdown)
+    // 按扩展名分派渲染器：CLI 没有设置界面，用默认类型表（md / markdown / dbml）。
+    // 与 GUI 走同一个 `render_body_by_renderer`，两条链路产出完全一致，
+    // 避免「GUI 里是对的、命令行里却把 dbml 当 Markdown 渲染成一堆裸文本」。
+    let types = md2x_core::docsource::TypeMap::default();
+    let renderer = types.renderer_for(path).ok_or_else(|| {
+        error::MpeError::UnsupportedFormat(format!(
+            "不支持的文件类型：{}",
+            path.extension().and_then(|e| e.to_str()).unwrap_or("无扩展名")
+        ))
+    })?;
+
+    // 检测是否为 SKILL.md（仅 Markdown 才有 front matter 语义）
+    let is_skill = renderer == md2x_core::docsource::Renderer::Markdown
+        && path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|n| n == "SKILL.md")
+            .unwrap_or(false);
+    let (metadata, body_src) = if is_skill {
+        converter::parse_front_matter(&source)
     } else {
-        (None, &markdown[..])
+        (None, &source[..])
     };
 
-    // 转换为 HTML（含 mermaid 图表一次性烘焙为内嵌 SVG）
-    let html_body = converter::convert_markdown_to_html_with_mermaid(body_md)?;
-    let html_body = converter::resolve_image_srcs(&html_body, path);
+    // 转换为 HTML body 片段（Markdown 含 mermaid 一次性烘焙为内嵌 SVG；
+    // DBML 产出数据字典表 + 可缩放画布，同样只是片段）
+    let html_body = converter::render_body_by_renderer(renderer, body_src, Some(path))?;
 
     // 生成标题
     let title = path
@@ -174,7 +186,10 @@ fn run() -> Result<(), error::MpeError> {
         }
         OutputFormat::Docx => {
             let docx_path = path.with_extension("docx");
-            md2x_core::docx::convert_markdown_to_docx(body_md, path, &docx_path)?;
+            // DOCX 生成器吃的是 Markdown：DBML 在内存里转成数据字典式 Markdown
+            // 再交给它，不落中间 .md 文件（与 GUI 的 export_docx 同一条短路逻辑）
+            let md = md2x_core::docsource::to_markdown(renderer, body_src, title);
+            md2x_core::docx::convert_markdown_to_docx(&md, path, &docx_path)?;
         }
         OutputFormat::Pdf | OutputFormat::Png => {
             let temp_dir = std::env::temp_dir().join("rust-mpe-browser");
@@ -216,7 +231,6 @@ fn run() -> Result<(), error::MpeError> {
 }
 
 /// 解析 `--var key=value`。
-///
 /// 不是 `key=value` 形状的参数直接丢弃：变量只是微调外观，
 /// 为拼错一个参数让整条转换失败并不划算（取值合法性由核心库兜底）。
 fn parse_vars(raw: &[String]) -> std::collections::HashMap<String, String> {
