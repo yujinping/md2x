@@ -14,9 +14,26 @@ use super::route;
 const NODE_W: f64 = 260.0;
 /// 行高（每列一行）。
 const ROW_H: f64 = 20.0;
-/// 表头高度。
+/// 表头高度（只有表名一行时）。
 const HD_H: f64 = 30.0;
 
+/// 表头下方再挂一行注释时的额外高度。
+///
+/// 13 而不是行高 20：注释用 9px 小字，一行 11 高再加 2 的呼吸位就够。
+/// 用固定增量而不是「按字数折成两行」，是因为画布是扫读视图——
+/// 一眼认出「这是哪张表」比读完注释重要，放不下就截断。
+const HD_SUB_H: f64 = 13.0;
+
+/// 画布上表名后面跟的注释最多占多少**显示宽度**。
+///
+/// 按宽度而不是按字符数：10 个汉字约 95px，10 个英文字符只有 53px——
+/// 同样「10 个字」在两种语言下的视觉长度差一倍。表头可用宽度约 236px，
+/// 若按字符数截断，中文刚好、英文则明显浪费一半空间、读起来像被砍断。
+///
+/// 所以预算取 20 个半角单位：中文（全角）算 2 单位 → 恰好 10 个汉字，
+/// 与需求「超过 10 个字截断」完全一致；英文（半角）算 1 单位 → 约 20 字符，
+/// 既放得下也不会顶到右侧的别名。
+const CMT_MAX_W: usize = 20;
 /// 列间横向间距。
 const GAP_X: f64 = 120.0;
 /// 层间纵向间距。
@@ -75,7 +92,96 @@ struct Placed {
 
 /// 表节点高度：表头 + 每列一行 + 底部留白。
 fn node_h(sc: &Schema, i: usize) -> f64 {
-    HD_H + sc.tables[i].cols.len() as f64 * ROW_H + 8.0
+    head_h(&sc.tables[i]) + sc.tables[i].cols.len() as f64 * ROW_H + 8.0
+}
+
+/// 表头高度：有注释行时比常态高出一个副行。
+fn head_h(t: &super::model::Table) -> f64 {
+    if canvas_comment(t).is_some() {
+        HD_H + HD_SUB_H
+    } else {
+        HD_H
+    }
+}
+
+/// 取画布上要显示的注释：优先表级注释 `comment`，回退到 `Note`。
+///
+/// 取表级而不是列级说明，是因为画布表头承载的是「这张表是什么」；
+/// 列说明在字典里每行都有，塞进表头只会把表名挤掉。
+///
+/// 只取首个非空行、去掉 Markdown 装饰标记后再截断：`Note` 常写成
+/// 多行块，原样显示会在表头出现 `#` 或 `**`。
+fn canvas_comment(t: &super::model::Table) -> Option<String> {
+    let raw = if t.comment.trim().is_empty() {
+        &t.note
+    } else {
+        &t.comment
+    };
+    let line = raw
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())?
+        .trim_start_matches('#')
+        .trim()
+        .trim_matches('*')
+        .trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(truncate_cmt(line, CMT_MAX_W))
+}
+
+/// 按显示宽度截断，超出部分以 `...` 收尾。
+///
+/// 全角字符（中日韩文字、全角标点）按 2 个半角单位计，其余按 1。
+/// 这是等宽近似，不需要精确排版——目的是中英文在同一预算下
+/// 得到相近的视觉长度，而不是让英文只显示一半表头。
+///
+/// 与 [`truncate`] 的区别：这里超出后保留预算内的字符**再加** `...`，
+/// 而 `truncate` 是「总数不超过 max」（吃掉一个字符换省略号）。
+/// 注释是给人读的短标签，宁可多三个点的宽度也要保住最后那个字的完整。
+fn truncate_cmt(s: &str, budget: usize) -> String {
+    let mut w = 0usize;
+    let mut out = String::with_capacity(s.len());
+    let mut cut = false;
+    for c in s.chars() {
+        let cw = char_w(c);
+        if w + cw > budget {
+            cut = true;
+            break;
+        }
+        w += cw;
+        out.push(c);
+    }
+    if cut {
+        out.push_str("...");
+    }
+    out
+}
+
+/// 单个字符占几个半角单位。
+///
+/// 覆盖常用全角区段即可：CJK 统一表意文字、CJK 标点、假名、全角形式。
+/// 用 `char::is_ascii` 做快速分流，绝大多数英文注释走第一条分支。
+fn char_w(c: char) -> usize {
+    if c.is_ascii() {
+        return 1;
+    }
+    let u = c as u32;
+    let wide = (0x1100..=0x115F).contains(&u)      // 谚文字母
+        || (0x2E80..=0x303E).contains(&u)          // CJK 部首 + 标点
+        || (0x3041..=0x33FF).contains(&u)          // 假名 + CJK 兼容
+        || (0x3400..=0x4DBF).contains(&u)          // CJK 扩展 A
+        || (0x4E00..=0x9FFF).contains(&u)          // CJK 统一表意文字
+        || (0xF900..=0xFAFF).contains(&u)          // CJK 兼容表意
+        || (0xFE30..=0xFE6F).contains(&u)          // CJK 兼容形式
+        || (0xFF00..=0xFF60).contains(&u)          // 全角 ASCII
+        || (0xFFE0..=0xFFE6).contains(&u); // 全角符号
+    if wide {
+        2
+    } else {
+        1
+    }
 }
 
 /// 分层结果是否「足够好看」，不值得为它放弃分层布局。
@@ -271,8 +377,8 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
             if !seen.insert((f.min(t), f.max(t))) {
                 continue;
             }
-            let fy = HD_H + col_row(sc, f, &r.from_col) * ROW_H + ROW_H / 2.0;
-            let ty = HD_H + col_row(sc, t, &r.to_col) * ROW_H + ROW_H / 2.0;
+            let fy = head_h(&sc.tables[f]) + col_row(sc, f, &r.from_col) * ROW_H + ROW_H / 2.0;
+            let ty = head_h(&sc.tables[t]) + col_row(sc, t, &r.to_col) * ROW_H + ROW_H / 2.0;
             raw.push((f, t, fy, ty));
         }
     }
@@ -400,12 +506,15 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
     for p in &placed {
         let t = &sc.tables[p.idx];
         let short = t.name.rsplit('.').next().unwrap_or(&t.name);
+        let hh = head_h(t);
+        let cmt = canvas_comment(t);
         svg.push_str(&format!(
             "<g class=\"dx-tbl-hit\" data-anchor=\"dx-t-{anc}\" data-k=\"{key}\">",
             anc = esc(&t.name.replace('.', "--").replace(' ', "_")),
             key = esc(&format!(
-                "{} {}",
+                "{} {} {}",
                 t.name,
+                cmt.clone().unwrap_or_default(),
                 t.cols.iter().map(|c| c.name.clone()).collect::<Vec<_>>().join(" ")
             ))
         ));
@@ -421,22 +530,22 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
         // 自定义色是用户在 DBML 里明确指定的，理当优先于主题。
         match &t.color {
             Some(c) => svg.push_str(&format!(
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{NODE_W}\" height=\"{HD_H}\" fill=\"{}\"/>",
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{NODE_W}\" height=\"{hh:.1}\" fill=\"{}\"/>",
                 p.x,
                 p.y,
                 esc(c)
             )),
             None => svg.push_str(&format!(
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{NODE_W}\" height=\"{HD_H}\" class=\"dx-node-hd\"/>",
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{NODE_W}\" height=\"{hh:.1}\" class=\"dx-node-hd\"/>",
                 p.x, p.y
             )),
         }
         svg.push_str(&format!(
             "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" class=\"dx-node-line\"/>",
             p.x,
-            p.y + HD_H,
+            p.y + hh,
             p.x + NODE_W,
-            p.y + HD_H
+            p.y + hh
         ));
         svg.push_str(&format!(
             "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"13\" font-weight=\"600\" class=\"dx-node-title\">{}</text>",
@@ -444,6 +553,20 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
             p.y + 19.0,
             esc(short)
         ));
+        // 表名后的注释：中英文表名都要带上 COMMENT 名字，超出 10 字截断。
+        //
+        // 放在**第二行**而不是表名右侧同一行：表名本身可能就很长
+        // （`subscriptions` 这类 13 字符的英文表名已经占掉半个表头），
+        // 同行并排会把两者都压成省略号。副行还能容纳中文注释的自然长度，
+        // 且不改变表名行的视觉重量——表名始终是表头的主信息。
+        if let Some(c) = &cmt {
+            svg.push_str(&format!(
+                "<text x=\"{:.1}\" y=\"{:.1}\" font-size=\"9.5\" class=\"dx-node-cmt\">{}</text>",
+                p.x + 12.0,
+                p.y + HD_H + 9.5,
+                esc(c)
+            ));
+        }
         if let Some(a) = &t.alias {
             // 用 `as x` 而不是裸别名：单独一个 `U` 在表头右侧会被读成表名或缩写，
             // 加上 as 才明确是「别名」。右对齐锚点固定在节点右内边距上，
@@ -474,7 +597,7 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
 
         // 列
         for (ci, c) in t.cols.iter().enumerate() {
-            let cy = p.y + HD_H + ci as f64 * ROW_H + 14.0;
+            let cy = p.y + hh + ci as f64 * ROW_H + 14.0;
             // 该列是否为外键：行内 ref 与顶层 Ref 已在解析期收口到 sc.refs，
             // 这里只需按 (表, 列) 查一次。表名既可能是完整名也可能是裸名
             // （`schema.table` vs `table`），两种都试，与字典表格的口径一致。
@@ -524,7 +647,7 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
 fn placed_row_height(sc: &Schema) -> f64 {
     sc.tables
         .iter()
-        .map(|t| HD_H + t.cols.len() as f64 * ROW_H + 8.0)
+        .map(|t| head_h(t) + t.cols.len() as f64 * ROW_H + 8.0)
         .fold(0.0f64, f64::max)
 }
 

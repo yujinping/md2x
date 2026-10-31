@@ -593,6 +593,92 @@ fn canvas_column_names_share_one_left_edge() {
     }
 }
 
+/// 画布表头在表名下方显示表级注释，且中英文都支持。
+///
+/// 用户要求的原话是「中英文表名需要把 COMMENT 的名字也加上」——
+/// 表名本身可能是英文（`subscriptions`），可读性靠注释补；
+/// 注释也可能是中文。两种来源（`Note:` / `[comment: '...']`）都要认。
+#[test]
+fn canvas_shows_table_comment_below_name() {
+    let src = "Table plans [comment: 'Plans'] {\n id int [pk]\n}\n\
+               Table subs {\n id int [pk]\n Note: '租户订阅记录'\n}";
+    let body = render::render_body(&parser::parse(src));
+    assert!(
+        body.contains("class=\"dx-node-cmt\">Plans<"),
+        "英文 comment 应显示在画布表头"
+    );
+    assert!(
+        body.contains("class=\"dx-node-cmt\">租户订阅记录<"),
+        "中文 Note 应显示在画布表头"
+    );
+}
+
+/// 超过 10 个汉字的注释必须截断并加 `...`，否则会顶出节点边界。
+///
+/// 中文按全角计 2 个单位、预算 20 单位，等价于 10 个汉字。
+#[test]
+fn canvas_comment_truncated_to_ten_chars_with_ellipsis() {
+    let long = "一二三四五六七八九十十一十二";
+    let src = format!("Table t {{\n id int [pk]\n Note: '{long}'\n}}");
+    let body = render::render_body(&parser::parse(&src));
+    assert!(
+        body.contains("class=\"dx-node-cmt\">一二三四五六七八九十...<"),
+        "超长中文注释应截断为前 10 字 + ..."
+    );
+}
+
+/// 英文字符只占 1 单位，预算内可显示约 20 个字符。
+///
+/// 这一条是为了防止「按字符数截断」的回归：若按 10 个**字符**截，
+/// 英文注释会在 10 个字母处被砍断，白白浪费半个表头的宽度。
+#[test]
+fn canvas_comment_gives_ascii_more_room_than_cjk() {
+    // 19 个字符，未超 20 单位预算 → 完整显示
+    let short_en = "Subscription plans";
+    let src = format!("Table t [comment: '{short_en}'] {{\n id int [pk]\n}}");
+    let body = render::render_body(&parser::parse(&src));
+    assert!(
+        body.contains(&format!("class=\"dx-node-cmt\">{short_en}<")),
+        "19 个 ASCII 字符在 20 单位预算内，不应被截断"
+    );
+
+    // 30 个字符 → 截断到 20
+    let long_en = "abcdefghijklmnopqrstuvwxyz1234";
+    let src = format!("Table t [comment: '{long_en}'] {{\n id int [pk]\n}}");
+    let body = render::render_body(&parser::parse(&src));
+    assert!(
+        body.contains("class=\"dx-node-cmt\">abcdefghijklmnopqrst...<"),
+        "ASCII 超长注释应截断为前 20 字符 + ..."
+    );
+}
+
+/// 恰好 10 个字不截断：边界不能多打三个点。
+#[test]
+fn canvas_comment_exactly_ten_chars_is_not_truncated() {
+    let exact = "一二三四五六七八九十";
+    let src = format!("Table t {{\n id int [pk]\n Note: '{exact}'\n}}");
+    let body = render::render_body(&parser::parse(&src));
+    assert!(
+        body.contains(&format!("class=\"dx-node-cmt\">{exact}<")),
+        "10 字整不应截断"
+    );
+}
+
+/// 注释里的 Markdown 装饰不应漏到画布表头上。
+///
+/// 多行 `Note: '''# 标题 ...'''` 是 DBML 的常见写法，
+/// 原样显示会在表头出现一个赤裸的 `#`。
+#[test]
+fn canvas_comment_strips_markdown_markers() {
+    let src = "Table t {\n id int [pk]\n Note: '''\n    # 租户主表\n\n    详细说明\n '''\n}";
+    let body = render::render_body(&parser::parse(src));
+    assert!(
+        body.contains("class=\"dx-node-cmt\">租户主表<"),
+        "应取首个非空行并去掉 # 前缀"
+    );
+    assert!(!body.contains("dx-node-cmt\">#"), "表头不应出现裸井号");
+}
+
 /// 连线不得穿过任何表节点。
 ///
 /// 这是「线穿表」的机械复现：造一个三列场景，让最右表引用最左表，

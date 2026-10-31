@@ -47,8 +47,14 @@ pub struct Table {
     pub name: String,
     /// `Table x as A` 里的别名
     pub alias: Option<String>,
-    /// 表注释
+    /// 表注释（`Note:` 块或多行文本）
     pub note: String,
+    /// 表头 `[comment: '...']` 里的短注释。
+    ///
+    /// 与 `note` 分开存：真实 schema 里两者常同时存在且用途不同——
+    /// `note` 是给人读的完整说明（可多行、带 Markdown），
+    /// `comment` 是紧贴表名的一行短标签（画布表头用）。
+    pub comment: String,
     /// `[headercolor: #xxx]`
     pub color: Option<String>,
     /// 所属 TableGroup 名

@@ -564,6 +564,7 @@ fn parse_table(s: &str, sc: &mut Schema) -> Option<usize> {
         name: unquote(name_part),
         alias,
         note: String::new(),
+        comment: String::new(),
         color: None,
         group: None,
         cols: Vec::new(),
@@ -578,6 +579,9 @@ fn parse_table(s: &str, sc: &mut Schema) -> Option<usize> {
                 match k.trim().to_ascii_lowercase().as_str() {
                     "headercolor" | "color" => t.color = Some(unquote(v)),
                     "note" => t.note = unquote(v),
+                    // `[comment: '...']` 与 `[note: ...]` 分开存，
+                    // 画布表头优先用 comment（短标签），详见 model::Table。
+                    "comment" => t.comment = unquote(v),
                     _ => {}
                 }
             }

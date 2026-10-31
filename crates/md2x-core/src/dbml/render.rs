@@ -521,6 +521,7 @@ table.dx-refs td:first-child{font-family:var(--mono,ui-monospace,monospace);font
 .dx-node-hd{fill:var(--bg-subtle,#f6f8fa)}
 .dx-node-line{stroke:var(--border,#e8e8e8)}
 .dx-node-title{fill:var(--fg-strong,#1f2328)}
+.dx-node-cmt{fill:var(--fg-muted,#57606a)}
 .dx-node-alias{fill:var(--fg-muted,#57606a)}
 .dx-node-col{fill:var(--fg,#333)}
 .dx-node-type{fill:var(--fg-faint,#8b949e)}
