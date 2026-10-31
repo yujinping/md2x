@@ -35,6 +35,50 @@ pub fn convert_markdown_to_html_with_mermaid(markdown: &str) -> Result<String, M
     Ok(crate::ext_diagram::render_ext_blocks(&h))
 }
 
+/// 按文档源类型把正文渲染成 HTML body 片段（不含页面骨架）。
+///
+/// 这是「统一渲染入口」：Markdown 与 DBML 最终都收敛到同一形态的片段，
+/// 再交给同一个模版填充（`template::render_html_with`）。
+/// 好处是模版、配色、明暗主题、导出链路对两者完全一致——
+/// 不需要为 DBML 维护第二套模版体系。
+///
+/// `src_path` 用于图片相对路径解析；DBML 与纯文本不需要，可传 None。
+pub fn render_body_by_renderer(
+    renderer: crate::docsource::Renderer,
+    text: &str,
+    src_path: Option<&Path>,
+) -> Result<String, MpeError> {
+    use crate::docsource::Renderer;
+    match renderer {
+        Renderer::Markdown => {
+            let h = convert_markdown_to_html_with_mermaid(text)?;
+            Ok(match src_path {
+                Some(p) => resolve_image_srcs(&h, p),
+                None => h,
+            })
+        }
+        Renderer::Dbml => Ok(crate::dbml::to_html_body(text)),
+        Renderer::PlainText => Ok(format!(
+            "<pre class=\"md2x-plaintext\"><code>{}</code></pre>",
+            escape_min_html(text)
+        )),
+    }
+}
+
+/// 最小 HTML 转义（纯文本渲染用，只处理会破坏结构的字符）。
+fn escape_min_html(s: &str) -> String {
+    let mut o = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            _ => o.push(c),
+        }
+    }
+    o
+}
+
 /// 修复含空格的链接/图片目标，使其能被 CommonMark 正确解析为链接。
 ///
 /// CommonMark 中，形如 `[text](url)` 的裸链接目标不能包含空格，否则整段会被当作

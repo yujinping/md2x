@@ -8,3 +8,5 @@ pub mod ext_diagram;
 pub mod aggregate;
 pub mod cdp;
 pub mod print_toc;
+pub mod dbml;
+pub mod docsource;

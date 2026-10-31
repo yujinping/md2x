@@ -10,6 +10,8 @@ pub enum MpeError {
     IoError(io::Error),
     /// 模板加载/校验失败（外部模板缺 {{BODY}} 占位符、文件不可读等）
     TemplateError(String),
+    /// 扩展名不在可渲染类型表内
+    UnsupportedFormat(String),
 }
 
 impl fmt::Display for MpeError {
@@ -25,6 +27,7 @@ impl fmt::Display for MpeError {
             }
             MpeError::IoError(e) => write!(f, "IO error: {e}"),
             MpeError::TemplateError(msg) => write!(f, "Template error: {msg}"),
+            MpeError::UnsupportedFormat(msg) => write!(f, "Unsupported format: {msg}"),
         }
     }
 }
