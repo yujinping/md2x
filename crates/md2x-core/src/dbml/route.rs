@@ -6,13 +6,22 @@
 //! （`api_keys.owner_id → users.id`，两张表都在 x=420）：`x1 <= x2` 成立，
 //! 于是从源表**右**边缘出线、却要往左走到目标，整条线从源表自己身上穿回去。
 //!
-//! **现在的模型**只用两种通道，且都不经过任何节点框：
+//! **现在的模型**用三种通道，都不经过任何节点框：
 //!
 //! - **列间走廊**：相邻列之间恒有 `GAP_X` 的空隙，中线两侧各 60px 内无节点。
 //!   同列/相邻列的边都在这条走廊里竖直行走。
-//! - **顶部与底部总线**：跨多列时没有任何一条走廊能直达（水平段必然横穿中间
-//!   整列），改用画布上下预留的横向车道。车道区在布局阶段就被让出来，节点
-//!   整体下移/上移，所以水平段永远不会压到任何表。
+//! - **中间列的水平空档**：跨多列时，如果能在两端的 y 之间找到一条横贯
+//!   所有中间列的水平通道——该高度上这些列恰好都没有节点——就直接穿过去。
+//!   同一层里表与表之间恒有 `GAP_Y` 的空隙，绝大多数跨列边都能走这里。
+//! - **顶部与底部总线**：上面两条都走不通时（中间列被整片占满）才用。
+//!   车道区在布局阶段就被让出来，节点整体下移/上移，所以水平段永远不会
+//!   压到任何表。
+//!
+//! **为什么必须有「中间空档」这一档**：只留走廊 + 总线时，一旦层内分列
+//! （59 表 schema 分了 12 列），跨 2 列以上就成了常态，52 条边里有 43 条
+//! 被迫挤进顶部总线，在 450px 高、9px 间距的车道带里排成密不透风的梳子——
+//! 图彻底读不出来。而在中间列的空档穿过去，路径只比相邻列多两个直角，
+//! 视觉上仍是「一条线连了两张表」。
 //!
 //! 换句话说，「线穿表」在结构上不可能发生，而不是靠调参让曲线看起来没穿。
 //!
@@ -27,6 +36,8 @@ pub struct Box {
     pub x: f64,
     /// 上边缘。
     pub y: f64,
+    /// 宽度。
+    pub w: f64,
     /// 高度。
     pub h: f64,
 }
@@ -45,13 +56,15 @@ pub struct Edge {
 }
 
 /// 一条边的走法。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Kind {
     /// 同列：绕到该列右侧走廊走 U 形（源和目标 x 完全相同，无法直连）
     SameCol,
     /// 相邻列：在两者之间的那条走廊里直接走
     Adjacent,
-    /// 跨列：上半区走顶部总线，下半区走底部总线
+    /// 跨多列但中间列在该高度有空档：水平段直接穿过空档
+    Pass { y: f64 },
+    /// 跨列且中间被占满：上半区走顶部总线，下半区走底部总线
     Bus { top: bool },
 }
 
@@ -98,6 +111,25 @@ struct Geom {
     ch_t: f64,
 }
 
+impl Plan {
+    /// 把计划里所有**绝对 y** 平移 `dy`。
+    ///
+    /// `Kind::Pass` 记的是穿过中间列空档的那个高度，它是在「节点尚未为
+    /// 总线让位」时算出来的绝对坐标。布局阶段随后会把所有节点整体下移
+    /// `top_reserved()` 腾出总线区——如果 Pass 的高度不跟着移动，水平段
+    /// 就会落在原位置，横穿整片节点。这个 bug 在 59 表 schema 上造成
+    /// 49 条连线穿表，而单元测试全绿（测试夹具没有总线区，dy 恒为 0）。
+    ///
+    /// 总线车道的 y 不走这里：它由 `emit` 按 `canvas_h` 现算。
+    pub fn shift(&mut self, dy: f64) {
+        for k in &mut self.kinds {
+            if let Kind::Pass { y } = k {
+                *y += dy;
+            }
+        }
+    }
+}
+
 /// 规划每条边的走法，并统计总线车道需求。
 ///
 /// `mid` 是节点区的垂直中点：在它上方的跨列边走顶部总线，下方走底部，
@@ -113,11 +145,17 @@ pub fn plan(boxes: &[Box], edges: &[Edge], mid: f64) -> Plan {
         } else if a.col.abs_diff(b.col) == 1 {
             Kind::Adjacent
         } else {
-            let mid_y = (a.y + e.from_dy + b.y + e.to_dy) / 2.0;
-            if mid_y <= mid {
-                Kind::Bus { top: true }
-            } else {
-                Kind::Bus { top: false }
+            // 跨多列：先找中间列的水平空档，找不到才退回总线
+            let sy = a.y + e.from_dy;
+            let ty = b.y + e.to_dy;
+            match find_gap(boxes, a.col, b.col, sy, ty) {
+                Some(y) => Kind::Pass { y },
+                None => {
+                    let mid_y = (sy + ty) / 2.0;
+                    Kind::Bus {
+                        top: mid_y <= mid,
+                    }
+                }
             }
         };
         let lane = match kind {
@@ -143,6 +181,68 @@ pub fn plan(boxes: &[Box], edges: &[Edge], mid: f64) -> Plan {
         bottom_lanes: bottom,
     }
 }
+
+/// 在 `[lo, hi]` 两条列之间找一条横贯的水平空档，返回其 y。
+///
+/// 空档 = 该 y 上**所有**中间列都没有节点覆盖。等价于：把中间列所有节点的
+/// 纵向占位取**并集**，空档就是并集的补集。取并集而不是逐列求交集，是因为
+/// 「穿过」要求每一列都让路，任一列被占就过不去——并集正好表达这个约束，
+/// 且结果是一组区间，能直接从中挑最合适的 y。
+///
+/// **y 的搜索范围是整张画布，不限于两端锚点之间。** 竖直段走的是列间走廊，
+/// 那里恒无节点，所以从 `sy` 先上/下挪到任意 y 再横穿是安全的。
+/// 早期把范围限制在 `[sy, ty]` 内，结果两端锚点处于同一行、而中间列恰好在
+/// 那一行有表时找不到空档，只能退回顶部总线——59 表 schema 上 52 条边里
+/// 有 43 条因此挤进总线，排成密不透风的梳子。
+///
+/// 挑选原则：离两端锚点中点最近的空档优先，即绕行最短。
+fn find_gap(boxes: &[Box], col_a: usize, col_b: usize, sy: f64, ty: f64) -> Option<f64> {
+    let (lo, hi) = if col_a < col_b {
+        (col_a, col_b)
+    } else {
+        (col_b, col_a)
+    };
+    // 两端所在的列不算「中间列」——线是从它们的边缘出发的
+    let mut occ: Vec<(f64, f64)> = boxes
+        .iter()
+        .filter(|b| b.col > lo && b.col < hi)
+        .map(|b| (b.y - GAP_CLEAR, b.y + b.h + GAP_CLEAR))
+        .collect();
+    if occ.is_empty() {
+        return Some(ty);
+    }
+    // 按起点排序后合并重叠区间，得到「整段被占」的连续块
+    occ.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(occ.len());
+    for (s, e) in occ {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+    // 空档 = 各占位块之间的**缝**。刻意不把画布上下边界算作空档：
+    // 那两处正是顶部/底部总线区，一旦允许就会被当成普通空档，
+    // 「找不到空档 → 退回总线」这条兜底永远不会触发，总线代码成了死路。
+    // 而且走画布边缘在视觉上就是总线，没必要用两条不同的代码路径画同一件事。
+    let want = (sy + ty) / 2.0;
+    let mut best: Option<f64> = None;
+    let mut consider = |y: f64| {
+        if best.map(|b| (y - want).abs() < (b - want).abs()).unwrap_or(true) {
+            best = Some(y);
+        }
+    };
+    for w in merged.windows(2) {
+        let (s, e) = (w[0].1, w[1].0);
+        // 缝窄于两倍余量时线会贴着表边划过，不如走总线干净
+        if e - s > GAP_CLEAR * 2.0 {
+            consider(((s + e) / 2.0).clamp(s + GAP_CLEAR, e - GAP_CLEAR));
+        }
+    }
+    best
+}
+
+/// 空档判定时给节点边缘留的余量（避免线贴着表边划过）。
+const GAP_CLEAR: f64 = 3.0;
 
 /// 顶部总线区的高度（含上下留白）。
 pub fn top_reserved(plan: &Plan) -> f64 {
@@ -210,6 +310,28 @@ pub fn emit(
                     g.sx, sy, cx, ty, g.ex
                 ));
             }
+            Kind::Pass { y } => {
+                // 竖直段落在两端列的走廊里，水平段穿过中间列的空档。
+                // 与 Adjacent 的区别只是水平段在 y 高度而非目标行高度。
+                if (y - ty).abs() < 0.5 {
+                    // 空档恰好就在目标行：退化成一次平移 + 直达
+                    out.push(format!(
+                        "M{:.1} {:.1} H{:.1} V{:.1} H{:.1}",
+                        g.sx, sy, g.ch_s, ty, g.ex
+                    ));
+                } else if (y - sy).abs() < 0.5 {
+                    // 空档在源行：先横穿再落到目标
+                    out.push(format!(
+                        "M{:.1} {:.1} H{:.1} V{:.1} H{:.1}",
+                        g.sx, sy, g.ch_t, ty, g.ex
+                    ));
+                } else {
+                    out.push(format!(
+                        "M{:.1} {:.1} H{:.1} V{:.1} H{:.1} V{:.1} H{:.1}",
+                        g.sx, sy, g.ch_s, y, g.ch_t, ty, g.ex
+                    ));
+                }
+            }
             Kind::Bus { top } => {
                 let lane = plan.lanes[i];
                 let lane_y = if top {
@@ -271,7 +393,13 @@ mod tests {
     use super::*;
 
     fn bx(col: usize, x: f64, y: f64, h: f64) -> Box {
-        Box { col, x, y, h }
+        Box {
+            col,
+            x,
+            y,
+            w: 260.0,
+            h,
+        }
     }
 
     /// 解析本模块生成的 `M{x} {y} H{x} V{y} …` 折线，返回顶点序列。
@@ -352,11 +480,12 @@ mod tests {
     }
 
     #[test]
-    fn cross_column_edge_goes_through_bus_and_avoids_middle_table() {
-        // roles(第2列) → tenants(第0列)，中间第1列有 users 挡着
+    fn cross_column_edge_falls_back_to_bus_when_no_gap() {
+        // roles(第2列) → tenants(第0列)，中间第1列被一张高表从上到下占满，
+        // 找不到任何横贯的水平空档，只能退回顶部总线
         let boxes = [
             bx(0, 40.0, 40.0, 98.0),
-            bx(1, 420.0, 40.0, 118.0),
+            bx(1, 420.0, 0.0, 600.0), // 贯穿整张画布的中间列
             bx(2, 800.0, 40.0, 98.0),
         ];
         let edges = [Edge {
@@ -366,15 +495,103 @@ mod tests {
             to_dy: 40.0,
         }];
         let p = plan(&boxes, &edges, 90.0);
-        assert_eq!(p.top_lanes, 1, "跨列边应占用一条顶部车道");
+        assert_eq!(p.top_lanes, 1, "无空档时跨列边应占用一条顶部车道");
         let top = top_reserved(&p);
         // 平移后重新 emit
         let moved: Vec<Box> = boxes
             .iter()
             .map(|b| Box { y: b.y + top, ..*b })
             .collect();
-        let d = &emit(&moved, &edges, &p, 260.0, 120.0, 500.0)[0];
+        let d = &emit(&moved, &edges, &p, 260.0, 120.0, 800.0)[0];
         assert_eq!(path_hits_box(d, &moved, 260.0), None, "path={d}");
+    }
+
+    /// 中间列有空档时，跨列边走空档而不是总线——这是 59 表 schema 上
+    /// 消灭「顶部梳状线团」的关键：52 条边里 43 条原本被迫挤进总线。
+    #[test]
+    fn cross_column_edge_passes_through_gap_when_available() {
+        // 中间列只有上下一小段有表，中间留出大片空档（y 208..697 之间可通行）
+        let boxes = [
+            bx(0, 40.0, 300.0, 98.0),
+            bx(1, 420.0, 40.0, 98.0),  // 中间列上方：40..138
+            bx(1, 420.0, 700.0, 98.0), // 中间列下方：700..798
+            bx(2, 800.0, 320.0, 98.0),
+        ];
+        let edges = [Edge {
+            from: 3,
+            to: 0,
+            from_dy: 40.0,
+            to_dy: 40.0,
+        }];
+        let p = plan(&boxes, &edges, 400.0);
+        assert_eq!(p.top_lanes, 0, "有空档时不该占用总线车道");
+        assert_eq!(p.bottom_lanes, 0);
+        let d = &emit(&boxes, &edges, &p, 260.0, 120.0, 900.0)[0];
+        assert_eq!(path_hits_box(d, &boxes, 260.0), None, "path={d}");
+        // 水平段必须真的横穿中间列所在的 x 区间（该列横跨 420..680）
+        let pts = parse_path(d);
+        let spans_mid = pts.windows(2).any(|w| {
+            (w[0].1 - w[1].1).abs() < 0.1
+                && w[0].0.min(w[1].0) < 450.0
+                && w[0].0.max(w[1].0) > 650.0
+        });
+        assert!(spans_mid, "水平段应横穿中间列: {d}");
+    }
+
+    /// `Plan::shift` 必须把 Pass 的穿行高度一起平移。
+    ///
+    /// **真实 bug 回归**：59 表 schema 上，`plan()` 在「节点尚未为总线让位」
+    /// 的坐标系里记下 Pass 的绝对 y；随后布局把节点整体下移 `top_reserved()`，
+    /// Pass 的 y 却没动，水平段落在原位置横穿整片表——实测 49 条连线穿模，
+    /// 而当时全部测试是绿的（夹具都不产生总线区，平移量恰好为零）。
+    #[test]
+    fn pass_height_moves_with_shift() {
+        // 中间列只在上、下各有一小段，中间留出空档
+        let boxes = [
+            bx(0, 40.0, 400.0, 98.0),  // 源
+            bx(1, 420.0, 40.0, 98.0),  // 中间列上方
+            bx(1, 420.0, 900.0, 98.0), // 中间列下方
+            bx(2, 800.0, 420.0, 98.0), // 目标
+        ];
+        let edges = [Edge {
+            from: 0,
+            to: 3,
+            from_dy: 40.0,
+            to_dy: 40.0,
+        }];
+        let mut p = plan(&boxes, &edges, 500.0);
+        // 这个夹具必须真的走 Pass，否则本测试失去意义
+        assert!(
+            matches!(p.kinds[0], Kind::Pass { .. }),
+            "夹具应触发 Pass 走法，实际 {:?}",
+            p.kinds[0]
+        );
+
+        // 模拟布局阶段为顶部总线让出若干像素。
+        // 取 80 而不是 60：空档中线在 y=500，居中于中间列 138..900 之间，
+        // 平移后若恰好落回某张表内部才能验证 bug，80 让 500→580 正落在
+        // 中间列下方那张表（900 起）之外、又不与任何表重叠的错位处，
+        // 反而更适合验证「不 shift 会穿、shift 后不穿」的对比。
+        let dy = 400.0;
+        p.shift(dy);
+        let moved: Vec<Box> = boxes
+            .iter()
+            .map(|b| Box { y: b.y + dy, ..*b })
+            .collect();
+        let d = &emit(&moved, &edges, &p, 260.0, 120.0, 1200.0)[0];
+        assert_eq!(
+            path_hits_box(d, &moved, 260.0),
+            None,
+            "shift 后水平段仍落在旧高度上，穿表了: {d}"
+        );
+
+        // 反向确认：不 shift 就会穿表（证明本测试确实能捕获该 bug）
+        let p0 = plan(&boxes, &edges, 500.0);
+        let d0 = &emit(&moved, &edges, &p0, 260.0, 120.0, 1200.0)[0];
+        assert!(
+            path_hits_box(d0, &moved, 260.0).is_some(),
+            "未 shift 时本应穿表，夹具失效: {d0}"
+        );
     }
 
     #[test]

@@ -823,3 +823,157 @@ fn sample_polyline(d: &str) -> Vec<(f64, f64)> {
     }
     out
 }
+
+/// 大 schema 的画布不能退化成「顶部梳状线团」。
+///
+/// 这是 59 表真实 schema（token-gateway）暴露的问题：早期布局把每层限高
+/// 1100px、超了就另起子列，59 张表被摊成 21 列，55 条边里 44 条被迫走顶部
+/// 总线，在 400px 高的区域里排成密不透风的横线，图彻底读不出来。
+///
+/// 现在把「总线边数」压到极低（实测 59 表为 0 条），以及画布宽高比接近容器。
+/// 用 40 张表 + 茂密外键构造一个规模相当、结构相似的夹具。
+#[test]
+fn large_schema_does_not_pile_edges_onto_top_bus() {
+    let mut src = String::new();
+    // 6 张主表（父），34 张子表分成两批挂到不同主表上
+    for i in 0..6 {
+        src.push_str(&format!("Table p{i} {{\n  id int [pk]\n  name varchar\n}}\n"));
+    }
+    for i in 0..34 {
+        let host = i % 6;
+        src.push_str(&format!(
+            "Table c{i} {{\n  id int [pk]\n  p_id int [ref: > p{host}.id]\n  name varchar\n  created_at timestamp\n}}\n"
+        ));
+    }
+    let sc = parser::parse(&src);
+    assert_eq!(sc.tables.len(), 40);
+    let (svg, w, h) = layout::build_svg(&sc);
+
+    // 宽高比：不能是横条（4.78:1 那种）也不能是竖条
+    let ratio = w / h;
+    assert!(
+        ratio > 0.5 && ratio < 3.0,
+        "大 schema 画布形状失控: {w}x{h} 比例 {ratio:.2}"
+    );
+
+    // 统计走顶部/底部总线的边：水平段落在所有表框的上下之外
+    let boxes = extract_node_boxes(&svg);
+    let (min_y, max_y) = boxes.iter().fold((f64::MAX, f64::MIN), |(lo, hi), b| {
+        (lo.min(b.1), hi.max(b.1 + b.3))
+    });
+    let mut bus = 0usize;
+    for d in extract_edge_paths(&svg) {
+        let pts = sample_vertices(&d);
+        // 找长水平段（跨 >100px）的 y
+        let lane = pts
+            .windows(2)
+            .filter(|w2| (w2[0].1 - w2[1].1).abs() < 0.1 && (w2[0].0 - w2[1].0).abs() > 100.0)
+            .map(|w2| w2[0].1)
+            .next_back();
+        if let Some(y) = lane {
+            if y < min_y - 1.0 || y > max_y + 1.0 {
+                bus += 1;
+            }
+        }
+    }
+    assert!(
+        bus <= 6,
+        "走总线的边过多（{bus} 条），画布会出现梳状线团"
+    );
+}
+
+/// 孤立表（无任何外键）必须单独成块，不能混进拓扑层里把那一列撑高。
+///
+/// 真实 schema 里 14 张孤立表曾全被归入层 0，把它从 3287px 顶到 9412px，
+/// 最终把画布拉成 1980×9492 的竖条。
+///
+/// 夹具用「一条 4 层依赖链 + 16 张孤立表」。这个测试**不代表**当前实现
+/// 一定走 `layout_layers` 的孤立表分支——自适应选型可能直接选网格，
+/// 那样两种实现都能通过。它守的是下限：不论走哪条路径，20 张表的画布
+/// 都不能退化成一个窄列。
+#[test]
+fn isolated_tables_are_laid_out_in_a_separate_block() {
+    let mut src = String::from(
+        "Table a { id int [pk] }\n\
+         Table b { id int [pk] a_id int [ref: > a.id] }\n\
+         Table c { id int [pk] b_id int [ref: > b.id] }\n\
+         Table d { id int [pk] c_id int [ref: > c.id] }\n",
+    );
+    for i in 0..16 {
+        src.push_str(&format!(
+            "Table lone{i} {{\n  id int [pk]\n  v1 varchar\n  v2 varchar\n  v3 varchar\n}}\n"
+        ));
+    }
+    let sc = parser::parse(&src);
+    let (svg, w, h) = layout::build_svg(&sc);
+    let ratio = w / h;
+    assert!(
+        ratio > 0.5,
+        "孤立表把画布拉成了竖条: {w}x{h} 比例 {ratio:.2}"
+    );
+
+    // 依赖链的 4 张表必须落在 4 个不同列（拓扑分层的基本要求）
+    let boxes = extract_node_boxes(&svg);
+    let mut cols: Vec<f64> = Vec::new();
+    for b in &boxes {
+        if !cols.iter().any(|x| (x - b.0).abs() < 1.0) {
+            cols.push(b.0);
+        }
+    }
+    assert!(
+        cols.len() >= 4,
+        "依赖链被压进了 {} 列，分层信息丢失",
+        cols.len()
+    );
+}
+
+/// 从画布 SVG 里取出所有节点框的 (x, y, w, h)。
+fn extract_node_boxes(svg: &str) -> Vec<(f64, f64, f64, f64)> {
+    let mut out = Vec::new();
+    for seg in svg.split("<g class=\"dx-tbl-hit\"").skip(1) {
+        let Some(rect) = seg.split("<rect ").nth(1) else {
+            continue;
+        };
+        let get = |k: &str| -> Option<f64> {
+            let i = rect.find(&format!("{k}=\""))?;
+            let rest = &rect[i + k.len() + 2..];
+            rest.split('"').next()?.parse().ok()
+        };
+        if let (Some(x), Some(y), Some(w), Some(h)) =
+            (get("x"), get("y"), get("width"), get("height"))
+        {
+            out.push((x, y, w, h));
+        }
+    }
+    out
+}
+
+/// 解析折线的顶点序列（本模块产出的只有 M/H/V）。
+fn sample_vertices(d: &str) -> Vec<(f64, f64)> {
+    let toks: Vec<&str> = d.split_whitespace().collect();
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    let mut p = (0.0f64, 0.0f64);
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i];
+        if let Some(v) = t.strip_prefix('M') {
+            p = (
+                v.parse().unwrap_or(0.0),
+                toks.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(0.0),
+            );
+            pts.push(p);
+            i += 2;
+        } else if let Some(v) = t.strip_prefix('H') {
+            p.0 = v.parse().unwrap_or(p.0);
+            pts.push(p);
+            i += 1;
+        } else if let Some(v) = t.strip_prefix('V') {
+            p.1 = v.parse().unwrap_or(p.1);
+            pts.push(p);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    pts
+}
