@@ -1,6 +1,6 @@
 [package]
 name = "md2x-gui"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2021"
 description = "md2x desktop application powered by Tauri 2"
 
