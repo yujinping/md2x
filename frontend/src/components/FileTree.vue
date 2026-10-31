@@ -358,11 +358,64 @@ const ctxMenu = reactive({
   name: '',
   repoRel: '',
   excluded: false,
+  isDir: false,
+  /// 该文件的渲染器 id（目录为空串）
+  renderer: '',
 })
 
 // 菜单按最大项数估算高度，为保证空间稳定不随异步结果跳动，统一按最大高度预留
-const CTX_MENU_MAX_H = 152
+// 8 项：复制相对路径 / 复制仓库路径 / 导出 MD / 导出 HTML / 导出 DOCX / 导出 PDF / 排除 / 恢复顺序
+const CTX_MENU_MAX_H = 300
 const CTX_MENU_W = 240
+
+/// 右键导出：打开系统保存对话框，再让后端把「指定路径」的文件导出过去。
+///
+/// 与工具栏导出共用后端同一套导出实现（`export_markdown` / `export_html` …），
+/// 唯一差别是显式带上 `path`——这样右键导出不必先把目标文件打开，
+/// 否则用户为了导出某个 dbml 得先点开它、丢掉当前正在读的文档。
+async function exportNode(format) {
+  const p = ctxMenu.path
+  const base = ctxMenu.name.replace(/\.[^.]+$/, '') || 'export'
+  closeCtxMenu()
+  const nameMap = { html: 'HTML 文档', pdf: 'PDF 文档', docx: 'Word 文档', markdown: 'Markdown 文档' }
+  try {
+    const d = await invoke('plugin:dialog|save', {
+      options: {
+        filters: [{ name: nameMap[format], extensions: format === 'markdown' ? ['md'] : [format] }],
+        defaultPath: base + (format === 'markdown' ? '.md' : '.' + format),
+        title: 'Export ' + format.toUpperCase(),
+      },
+    })
+    if (!d) return
+    if (format === 'markdown') {
+      await invoke('export_markdown', { dst: d, path: p })
+    } else if (format === 'docx') {
+      await invoke('export_docx', { dst: d, path: p })
+    } else {
+      // HTML / PDF 需要模版与主题：用户期望的显然是「我当前在看的那一套」，
+      // 所以带上设置里的当前值，而不是后端默认值
+      await invoke('export_' + format, {
+        dst: d,
+        path: p,
+        fullWidth: settings.fullWidth,
+        theme: settings.theme,
+        templateId: settings.templateId,
+      })
+    }
+  } catch (_) {
+    /* 导出失败由后端报错；这里不额外弹窗，避免菜单关闭后再弹一层 */
+  }
+}
+
+/// 是否显示「导出 Markdown」：Markdown 原样复制意义不大，
+/// 真正的用途是 DBML → 数据字典 md，但仍对全部文件开放以免用户困惑
+/// （统一入口，行为一致）。DOCX 项按渲染器是否支持决定。
+function canExportDocx() {
+  if (ctxMenu.isDir) return false
+  const r = settings.rendererList.find(x => x.id === ctxMenu.renderer)
+  // 清单未拉取时保守显示：后端会拒绝并报错，但至少不会「本该有却没入口」
+  return r ? r.supportsDocx : true
+}
 
 async function onNodeContextMenu(info) {
   // 预留菜单尺寸做边缘回退，避免贴边溢出窗口
@@ -370,9 +423,13 @@ async function onNodeContextMenu(info) {
   ctxMenu.name = norm(info.path).split('/').pop() || info.path
   ctxMenu.repoRel = ''
   ctxMenu.excluded = !!info.excluded
+  ctxMenu.isDir = !!info.isDir
+  ctxMenu.renderer = info.renderer || ''
   ctxMenu.x = Math.min(info.x, window.innerWidth - CTX_MENU_W)
   ctxMenu.y = Math.min(info.y, window.innerHeight - CTX_MENU_MAX_H)
   ctxMenu.visible = true
+  // 渲染器清单要用来判断「支持哪些导出格式」，首次右键时兜底拉一次
+  if (settings.rendererList.length === 0) settings.loadRenderTypes()
 
   // 异步补充仓库相对路径：不在任何 git 仓库内时 invoke 返回 null，届时该项不渲染
   const target = info.path
@@ -612,7 +669,7 @@ function openFile(path) {
         v-else
         class="text-center text-xs mt-8 px-6 leading-relaxed"
         :style="{ color: 'var(--text-dim)' }"
-      >{{ t('treeNoMarkdown', settings.lang) }}</div>
+      >{{ t('treeNoRenderable', settings.lang) }}</div>
     </div>
 
     <!-- 右键菜单：路径复制（相对当前文件夹 / 相对 git 仓库）+ 排除 -->
@@ -656,6 +713,58 @@ function openFile(path) {
         </button>
 
         <div class="my-1" :style="{ borderTop: '1px solid var(--border)' }" />
+
+        <!-- 导出：文件节点才出现。DBML 的「导出 Markdown」即数据字典式 md -->
+        <template v-if="!ctxMenu.isDir">
+          <button
+            class="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] border-none cursor-pointer text-left transition-colors duration-100 hover:opacity-80"
+            :style="{ background: 'transparent', color: 'var(--text)' }"
+            @click.stop="exportNode('markdown')"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--text-muted)">
+              <path d="M2 3.5h3.4l1 1.2h6.6v7.8H2z" />
+              <path d="M6 9.2h4M8 7.4v3.6" />
+            </svg>
+            {{ t('ctxExportMd', settings.lang) }}
+          </button>
+          <button
+            class="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] border-none cursor-pointer text-left transition-colors duration-100 hover:opacity-80"
+            :style="{ background: 'transparent', color: 'var(--text)' }"
+            @click.stop="exportNode('html')"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--text-muted)">
+              <path d="M5.5 6L3 8l2.5 2M10.5 6L13 8l-2.5 2M9 4.5l-2 7" />
+            </svg>
+            {{ t('ctxExportHtml', settings.lang) }}
+          </button>
+          <button
+            class="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] border-none cursor-pointer text-left transition-colors duration-100 hover:opacity-80"
+            :style="{ background: 'transparent', color: 'var(--text)' }"
+            @click.stop="exportNode('pdf')"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--text-muted)">
+              <path d="M4 1.5h5l3 3v10H4z" />
+              <path d="M9 1.5v3h3" />
+              <path d="M6 11V8.5h1.2a1 1 0 0 1 0 2H6" />
+            </svg>
+            {{ t('ctxExportPdf', settings.lang) }}
+          </button>
+          <button
+            v-if="canExportDocx()"
+            class="flex items-center gap-2 w-full px-3 py-1.5 text-[12.5px] border-none cursor-pointer text-left transition-colors duration-100 hover:opacity-80"
+            :style="{ background: 'transparent', color: 'var(--text)' }"
+            @click.stop="exportNode('docx')"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5 flex-shrink-0" style="color: var(--text-muted)">
+              <path d="M4 1.5h5l3 3v10H4z" />
+              <path d="M9 1.5v3h3" />
+              <path d="M5.8 8l.9 4 1.3-2.6L9.3 12l.9-4" />
+            </svg>
+            {{ t('ctxExportDocx', settings.lang) }}
+          </button>
+        </template>
+
+        <div v-if="!ctxMenu.isDir" class="my-1" :style="{ borderTop: '1px solid var(--border)' }" />
 
         <!-- 排除：不导出。目录被排除时其内容一并排除，故不做逐级勾选 -->
         <button

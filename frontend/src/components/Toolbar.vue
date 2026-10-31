@@ -201,6 +201,11 @@ function onToggleFullWidth() {
               <span class="w-2 h-2 rounded-sm" style="background:#2b579a"></span>
               {{ t('exportDocx', settings.lang) }}
             </button>
+            <!-- 数据字典式 Markdown：DBML 的主用途（schema 进 git 评审） -->
+            <button class="dropdown-item" :disabled="!hasFile" @click="onExportClick('markdown')">
+              <span class="w-2 h-2 rounded-sm" style="background:#6b7280"></span>
+              {{ t('ctxExportMd', settings.lang) }}
+            </button>
           </div>
         </div>
       </template>

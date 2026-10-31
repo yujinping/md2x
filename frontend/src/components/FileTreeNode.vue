@@ -19,6 +19,10 @@ const isDir = computed(() => props.node.isDir)
 const isOpen = computed(() => isDir.value && props.expanded.has(props.node.path))
 const isActive = computed(() => !isDir.value && props.node.path === props.activePath)
 const isExcluded = computed(() => !!props.node.excluded)
+/// 渲染器类型：由后端按当前类型配置算好随节点下发，前端不另存一份映射表
+const renderer = computed(() => props.node.renderer || '')
+/// DBML 用不同图标，一眼区分「数据字典」与「文档」
+const isDbml = computed(() => renderer.value === 'dbml')
 
 const rel = computed(() => props.relOf(props.node.path))
 /// 自己正被拖动：整行淡出，表示「正在搬这一行」
@@ -47,6 +51,7 @@ function onContextMenu(e) {
     path: props.node.path,
     isDir: isDir.value,
     excluded: isExcluded.value,
+    renderer: renderer.value,
     x: e.clientX,
     y: e.clientY,
   })
@@ -113,6 +118,12 @@ function onContextMenu(e) {
       >
         <template v-if="isDir">
           <path d="M1.5 4.5a1 1 0 0 1 1-1h3.2l1.6 2h5.2a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-7z" />
+        </template>
+        <!-- DBML：三层圆柱（数据库符号），与文档图标的「页」形一眼可分 -->
+        <template v-else-if="isDbml">
+          <ellipse cx="8" cy="3.6" rx="5" ry="1.9" />
+          <path d="M3 3.6v8.8c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9V3.6" />
+          <path d="M3 8c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9" />
         </template>
         <template v-else>
           <path d="M4 1.5h5l3 3v10H4z" />

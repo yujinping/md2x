@@ -67,6 +67,12 @@ const TABS = [
     icon: 'M8 1.8v8.2M5 7.2l3 3 3-3M2.6 11.6v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1v-1.6',
   },
   {
+    id: 'types',
+    labelKey: 'settingsTabTypes',
+    // 文件 + 齿轮：哪些文件类型能进来、用什么渲染
+    icon: 'M1.8 3.2h5.2l1.4 1.6h5.8v8H1.8zM6.2 9.2h3.6M8 7.4v3.6',
+  },
+  {
     id: 'diagrams',
     labelKey: 'settingsTabDiagrams',
     // 流程图节点：图表渲染能力
@@ -111,6 +117,112 @@ onMounted(async () => {
   } catch (_) {}
   loadTemplates()
   loadExtTools()
+  loadRenderTypeState()
+})
+
+// ===== 可渲染文件类型 =====
+// 配置存档在后端：文件树过滤、预览渲染、导出三处都读那一份。
+// 这里维护的是「编辑中的草稿」——改动先落草稿，点保存才提交，
+// 避免每敲一个字符就写盘并触发一次整棵树重扫。
+const typeDraft = ref([])
+const typeSaving = ref(false)
+const typeHint = ref(null) // { ok: boolean, text: string } | null
+const typeNewExt = ref('')
+const typeNewRenderer = ref('plain_text')
+
+/// 渲染器展示名：内置三个走 i18n，后端塞进来的其他 id 原样显示
+function rendererLabel(id, fallback) {
+  const map = {
+    markdown: 'rendererMarkdown',
+    dbml: 'rendererDbml',
+    plain_text: 'rendererPlainText',
+  }
+  return map[id] ? t(map[id], settings.lang) : (fallback || id)
+}
+
+/// 该渲染器是否支持导出 DOCX（决定右键菜单里是否出现 DOCX 项）
+function rendererSupportsDocx(id) {
+  const r = settings.rendererList.find(x => x.id === id)
+  return !!(r && r.supportsDocx)
+}
+
+function loadRenderTypeState() {
+  settings.loadRenderTypes().then(() => {
+    typeDraft.value = settings.renderTypes.map(r => ({ ...r }))
+    // 新增行的默认渲染器跟随可选清单第一项（通常是 Markdown），
+    // 避免清单变化后默认值指向一个不存在的 id
+    if (settings.rendererList.length) {
+      typeNewRenderer.value = settings.rendererList[0].id
+    }
+  })
+}
+
+/// 扩展名归一化：与后端 `normalize_ext` 同一口径（去点、trim、小写）。
+/// 前端先归一一次是为了能在提交前就给出「已存在」提示，
+/// 而不是等后端接受后又看见列表里多出两个长得一样的行。
+function normalizeExt(raw) {
+  return String(raw || '').trim().replace(/^\.+/, '').toLowerCase()
+}
+
+function isExtValid(ext) {
+  return /^[a-z0-9_+-]+$/.test(ext)
+}
+
+function addTypeRow() {
+  typeHint.value = null
+  const ext = normalizeExt(typeNewExt.value)
+  if (!ext) return
+  if (!isExtValid(ext)) {
+    typeHint.value = { ok: false, text: t('renderTypeExtInvalid', settings.lang) }
+    return
+  }
+  if (typeDraft.value.some(r => r.ext === ext)) {
+    typeHint.value = { ok: false, text: t('renderTypeExtExists', settings.lang) }
+    return
+  }
+  typeDraft.value = [
+    ...typeDraft.value,
+    {
+      ext,
+      renderer: typeNewRenderer.value,
+      rendererLabel: rendererLabel(typeNewRenderer.value, ''),
+      enabled: true,
+    },
+  ]
+  typeNewExt.value = ''
+}
+
+function removeTypeRow(ext) {
+  typeDraft.value = typeDraft.value.filter(r => r.ext !== ext)
+}
+
+function onDraftRendererChange(row, id) {
+  row.renderer = id
+  row.rendererLabel = rendererLabel(id, '')
+}
+
+async function saveTypes() {
+  if (typeSaving.value) return
+  typeSaving.value = true
+  typeHint.value = null
+  const ok = await settings.saveRenderTypes(typeDraft.value)
+  typeSaving.value = false
+  if (ok) {
+    typeDraft.value = settings.renderTypes.map(r => ({ ...r }))
+    typeHint.value = { ok: true, text: t('renderTypeSaved', settings.lang) }
+  } else {
+    typeHint.value = { ok: false, text: t('renderTypeSaveFail', settings.lang) }
+  }
+}
+
+/// 草稿与已保存配置是否有差异（决定「保存」按钮是否可用）
+const typeDirty = computed(() => {
+  const saved = settings.renderTypes
+  if (saved.length !== typeDraft.value.length) return true
+  return typeDraft.value.some((r, i) => {
+    const s = saved[i]
+    return !s || s.ext !== r.ext || s.renderer !== r.renderer || s.enabled !== r.enabled
+  })
 })
 
 const viewModes = [
@@ -816,6 +928,111 @@ async function setDefault() {
               <p v-if="copyHint" class="mt-1.5 text-[11px]" :style="{ color: copyFailed ? '#ef4444' : 'var(--accent)' }">{{ copyHint }}</p>
               <p v-if="templatesError" class="mt-1.5 text-[11px]" :style="{ color: '#ef4444' }">{{ t('templateLoadFail', settings.lang) }}</p>
               <p v-else-if="templateMissing" class="mt-1.5 text-[11px]" :style="{ color: 'var(--amber)' }">{{ t('templateMissingNote', settings.lang) }}</p>
+            </div>
+          </template>
+
+          <!-- ===== 类型：哪些扩展名可渲染、各自用什么渲染器 ===== -->
+          <template v-else-if="activeTab === 'types'">
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-3">
+                <div class="text-xs font-semibold uppercase tracking-wider" :style="{ color: 'var(--text-muted)' }">{{ t('settingsRenderTypes', settings.lang) }}</div>
+                <button
+                  class="h-7 px-2.5 rounded-lg border text-[12px] font-medium flex items-center gap-1.5"
+                  :style="{
+                    borderColor: 'var(--border)',
+                    color: typeDirty && !typeSaving ? 'var(--accent)' : 'var(--text-dim)',
+                    background: 'transparent',
+                    cursor: typeDirty && !typeSaving ? 'pointer' : 'not-allowed',
+                    opacity: typeDirty && !typeSaving ? 1 : 0.45,
+                  }"
+                  :disabled="!typeDirty || typeSaving"
+                  @click="saveTypes"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5">
+                    <path d="M2.5 8.5l3.5 3.5 7.5-8" />
+                  </svg>
+                  {{ t('presetSave', settings.lang) }}
+                </button>
+              </div>
+
+              <!-- 规则表：一行一个扩展名 -->
+              <div class="flex flex-col gap-1.5">
+                <div
+                  v-for="row in typeDraft"
+                  :key="row.ext"
+                  class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg min-w-0"
+                  :style="{ border: '1px solid var(--border)' }"
+                >
+                  <!-- 启用开关：关掉即从文件树消失，但配置保留，随时可再开 -->
+                  <input
+                    type="checkbox"
+                    class="w-3.5 h-3.5 cursor-pointer flex-shrink-0"
+                    :checked="row.enabled"
+                    :title="t('renderTypeEnabled', settings.lang)"
+                    @change="row.enabled = $event.target.checked"
+                  />
+                  <code
+                    class="text-[12px] font-mono flex-shrink-0 min-w-[68px]"
+                    :style="{ color: row.enabled ? 'var(--text)' : 'var(--text-dim)' }"
+                  >.{{ row.ext }}</code>
+                  <select
+                    class="flex-1 min-w-0 h-7 px-2 rounded-md text-[12px] outline-none cursor-pointer"
+                    :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                    :value="row.renderer"
+                    @change="onDraftRendererChange(row, $event.target.value)"
+                  >
+                    <option v-for="r in settings.rendererList" :key="r.id" :value="r.id">
+                      {{ rendererLabel(r.id, r.label) }}
+                    </option>
+                  </select>
+                  <button
+                    class="w-6 h-6 rounded-md flex items-center justify-center cursor-pointer flex-shrink-0"
+                    :style="{ color: 'var(--text-dim)', background: 'transparent', border: 'none' }"
+                    :title="t('renderTypeRemove', settings.lang)"
+                    @click="removeTypeRow(row.ext)"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" class="w-3 h-3">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <p v-if="!typeDraft.length" class="text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('renderTypeEmpty', settings.lang) }}</p>
+              </div>
+
+              <!-- 新增一行：扩展名 + 渲染器 -->
+              <div class="flex items-center gap-2 mt-2.5">
+                <input
+                  v-model="typeNewExt"
+                  type="text"
+                  class="w-[120px] h-7 px-2.5 rounded-lg text-[12px] font-mono outline-none"
+                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                  :placeholder="t('renderTypeExtPlaceholder', settings.lang)"
+                  @keydown.enter="addTypeRow"
+                />
+                <select
+                  v-model="typeNewRenderer"
+                  class="flex-1 min-w-0 h-7 px-2 rounded-lg text-[12px] outline-none cursor-pointer"
+                  :style="{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }"
+                >
+                  <option v-for="r in settings.rendererList" :key="r.id" :value="r.id">
+                    {{ rendererLabel(r.id, r.label) }}
+                  </option>
+                </select>
+                <button
+                  class="h-7 px-3 rounded-lg border text-[12px] font-medium cursor-pointer flex items-center gap-1.5 flex-shrink-0"
+                  :style="{ borderColor: 'var(--border)', color: 'var(--text)', background: 'transparent' }"
+                  @click="addTypeRow"
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" class="w-3.5 h-3.5">
+                    <path d="M8 3v10M3 8h10" />
+                  </svg>
+                  {{ t('renderTypeAdd', settings.lang) }}
+                </button>
+              </div>
+
+              <p v-if="typeHint" class="mt-2 text-[11px]" :style="{ color: typeHint.ok ? 'var(--accent)' : '#ef4444' }">{{ typeHint.text }}</p>
+              <p class="mt-2.5 text-[11px] leading-relaxed" :style="{ color: 'var(--text-dim)' }">{{ t('renderTypesNote', settings.lang) }}</p>
             </div>
           </template>
 

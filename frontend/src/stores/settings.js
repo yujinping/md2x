@@ -43,6 +43,48 @@ function readPresets() {
 // 与导出页面右下角切换按钮保持一致 —— 那边是二态互切，没有「跟随系统」档。
 const THEME_VALUES = ['light', 'dark']
 
+// ===== 可渲染类型配置 =====
+// 真正存档在后端（<app_data>/render-types.json）：文件树过滤、预览渲染、导出
+// 三处都在 Rust 侧读同一份，前端这份只是给设置界面用的镜像。
+// 不存 localStorage 的理由与其他设置不同——这一项直接决定「哪些文件能打开」，
+// 存两处必然出现「设置里改了、文件树没变」的静默不一致。
+const renderTypes = ref([])
+const rendererList = ref([])
+
+/// 从后端拉取类型配置与可选渲染器清单（设置界面打开时调用）
+async function loadRenderTypes() {
+  try {
+    const [rules, list] = await Promise.all([
+      invoke('get_render_types'),
+      invoke('list_renderers'),
+    ])
+    renderTypes.value = Array.isArray(rules) ? rules : []
+    rendererList.value = Array.isArray(list) ? list : []
+  } catch (_) {
+    // 后端不可用（浏览器调试模式）：留空即可，界面显示「暂无」而不是报错
+  }
+}
+
+/// 保存类型配置。返回 true 表示后端已接受。
+/// 成功后同步刷新本地镜像——后端会做去点/小写归一，不回读就会出现
+/// 「我输入 .DBML，界面还显示 .DBML，实际存的是 dbml」的错觉。
+async function saveRenderTypes(rules) {
+  try {
+    await invoke('set_render_types', {
+      rules: rules.map(r => ({
+        ext: r.ext,
+        renderer: r.renderer,
+        rendererLabel: r.rendererLabel || '',
+        enabled: r.enabled !== false,
+      })),
+    })
+    await loadRenderTypes()
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 export const useSettingsStore = defineStore('settings', () => {
   // 存量配置里可能有历史遗留的 'auto'（旧版三档遗留），按当前系统偏好落定为具体档位
   const savedTheme = localStorage.getItem(LS_THEME)
@@ -223,6 +265,10 @@ export const useSettingsStore = defineStore('settings', () => {
     addExportPreset,
     removeExportPreset,
     onThemeChange,
-    prefersDark
+    prefersDark,
+    renderTypes,
+    rendererList,
+    loadRenderTypes,
+    saveRenderTypes,
   }
 })

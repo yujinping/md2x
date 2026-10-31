@@ -138,9 +138,25 @@ async function openFileAndRender(path) {
 }
 
 /// 打开文件并记入历史（链接点击 / 打开文件 / 拖拽均走此入口）
-async function openMdFile(path) {
+/// 接受任何「设置里登记为可渲染」的类型（md / dbml / 用户自定义）
+async function openDocFile(path) {
   pushHistory(path)
   await openFileAndRender(path)
+}
+
+/// 当前配置里可渲染的扩展名集合（用于链接拦截与打开对话框过滤器）。
+/// 直接读 store 的镜像：设置界面保存后 store 会重新拉取，这里永远是最新一份。
+function supportedExts() {
+  const exts = settings.renderTypes.filter(r => r.enabled).map(r => r.ext)
+  // 后端不可用（浏览器调试）时退回默认口径，至少不会连 .md 都打不开
+  return exts.length ? exts : ['md', 'dbml']
+}
+
+/// 路径是否为可渲染类型
+function isSupportedPath(p) {
+  const m = /\.([A-Za-z0-9_+-]+)$/.exec(String(p || ''))
+  if (!m) return false
+  return supportedExts().includes(m[1].toLowerCase())
 }
 
 /// 后退：回到历史中的上一份文件
@@ -200,15 +216,21 @@ async function loadPreview() {
 function injectLinkHandler(html) {
   const open = '<' + 'script>'
   const close = '<' + '/script>'
+  // 扩展名清单在这里生成一次字面量：iframe 内的脚本与父窗口不共享作用域，
+  // 只能把「哪些后缀算内部链接」当成数据编进去，不能读 store。
+  // 用 JSON 字面量而不是正则拼接，避免扩展名里出现正则元字符时行为异常。
+  const exts = JSON.stringify(supportedExts())
   const code = `
 (function () {
+  var EXTS = ${exts};
   document.addEventListener('click', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a') : null;
     if (!a) return;
     var href = a.getAttribute && a.getAttribute('href');
     if (!href) return;
-    // 仅拦截指向 .md 的内部链接（相对路径或 file://），锚点与外链放行
-    if (/\\.md([?#]|$)/i.test(href)) {
+    // 仅拦截指向受支持类型的内部链接（相对路径或 file://），锚点与外链放行
+    var m = /\\.([A-Za-z0-9_+-]+)(?:[?#]|$)/.exec(href);
+    if (m && EXTS.indexOf(m[1].toLowerCase()) !== -1) {
       e.preventDefault();
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'md2x-link', href: href }, '*');
@@ -301,9 +323,9 @@ async function resolveAndOpen(href) {
       return
     }
   }
-  if (!target || !/\.md$/i.test(target)) return
-  // 在应用内以 HTML 方式打开该 .md（openMdFile 会重新渲染预览）
-  openMdFile(target)
+  if (!target || !isSupportedPath(target)) return
+  // 在应用内以 HTML 方式打开（openDocFile 会重新渲染预览）
+  openDocFile(target)
 }
 
 function onIframeMessage(e) {
@@ -383,9 +405,11 @@ async function onSavePdf() {
 }
 
 async function onExportDoc(format, preset) {
-  const ext = format
-  const nameMap = { html: 'HTML 文档', pdf: 'PDF 文档', docx: 'Word 文档' }
-  const base = (fileName.value || 'document').replace(/\.md$/i, '')
+  const ext = format === 'markdown' ? 'md' : format
+  const nameMap = { html: 'HTML 文档', pdf: 'PDF 文档', docx: 'Word 文档', markdown: 'Markdown 文档' }
+  // 去掉任意受支持的扩展名，而不只是 .md：从 dbml 导出 DOCX 时
+  // 默认名不该是 schema.dbml.docx
+  const base = (fileName.value || 'document').replace(/\.[A-Za-z0-9_+-]+$/, '')
   // 预设导出时按预设里的参数走，而不是当前设置：两者可能不一致
   // （用户在菜单里点了「交审 PDF」，不该用上次调过的主题去导）
   const theme = preset?.theme || settings.theme
@@ -394,7 +418,7 @@ async function onExportDoc(format, preset) {
   try {
     const d = await invoke('plugin:dialog|save', {
       options: {
-        filters: [{ name: nameMap[format], extensions: [ext] }],
+        filters: [{ name: nameMap[format] || format, extensions: [ext] }],
         defaultPath: base + '.' + ext,
         title: 'Export ' + ext.toUpperCase()
       }
@@ -403,6 +427,8 @@ async function onExportDoc(format, preset) {
     setStatus('statusExporting', 'busy')
     if (format === 'docx') {
       await invoke('export_docx', { dst: d })
+    } else if (format === 'markdown') {
+      await invoke('export_markdown', { dst: d })
     } else {
       await invoke('export_' + format, {
         dst: d,
@@ -411,7 +437,7 @@ async function onExportDoc(format, preset) {
         templateId
       })
     }
-    setStatus('statusExportReady', 'ready')
+    setStatus(format === 'markdown' ? 'statusExportMarkdownReady' : 'statusExportReady', 'ready')
   } catch (err) {
     setStatus(err.toString(), 'error')
   }
@@ -541,7 +567,7 @@ async function openFolder(path, opts = {}) {
     // 否则保持现有欢迎介绍页
     if (opts.autoReadme !== false && !hasFile.value) {
       const readme = findRootReadme(tree)
-      if (readme) await openMdFile(readme)
+      if (readme) await openDocFile(readme)
     }
   } catch (e) {
     setStatus(e.toString(), 'error')
@@ -728,7 +754,7 @@ async function startDropListener() {
           await openFolder(p)
         } else {
           previewState.value = null
-          await openMdFile(p)
+          await openDocFile(p)
         }
       }
     } catch (_) {
@@ -785,14 +811,16 @@ async function onOpenFile() {
   try {
     const p = await invoke('plugin:dialog|open', {
       options: {
-        filters: [{ name: 'Markdown', extensions: ['md'] }],
+        // 过滤器直接沿用设置里的类型清单：不写死 md，
+        // 否则用户在设置里加了 dbml 却在这对话框里选不到它
+        filters: [{ name: 'Documents', extensions: supportedExts() }],
         multiple: false,
         directory: false,
-        title: 'Select Markdown'
+        title: 'Select Document'
       }
     })
     if (!p) return
-    await openMdFile(p)
+    await openDocFile(p)
   } catch (e) {
     setStatus(e.toString(), 'error')
   }
@@ -800,6 +828,9 @@ async function onOpenFile() {
 
 // File watcher + menu polling + startup
 onMounted(async () => {
+  // 类型清单是「哪些文件能打开」的判据，必须在任何 openDocFile 之前就绪：
+  // 链接拦截与打开对话框都依赖它。放最前面且 await，避免首次点击链接时清单还空着
+  await settings.loadRenderTypes()
   startDropListener()
 
   // 主题切换后重渲染预览：后端把该档位固化进 HTML，
@@ -975,7 +1006,7 @@ onMounted(async () => {
         :root-name="folderName"
         :nodes="folderTree"
         :current-path="currentPath"
-        @open-file="openMdFile"
+        @open-file="openDocFile"
         @hide-tree="hideFileTree"
         @layout-change="onTreeLayoutChange"
       />
