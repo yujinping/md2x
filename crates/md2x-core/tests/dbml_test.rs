@@ -592,3 +592,148 @@ fn canvas_column_names_share_one_left_edge() {
         );
     }
 }
+
+/// 连线不得穿过任何表节点。
+///
+/// 这是「线穿表」的机械复现：造一个三列场景，让最右表引用最左表，
+/// 中间那张表正好挡在直线路径上。旧实现用贝塞尔直连，曲线必然穿中间表。
+#[test]
+fn canvas_edges_never_cross_table_boxes() {
+    // 三张表分在三个列槽位，c 引用 a，b 挡在中间
+    let src = "Table a { id int [pk] }\n\
+               Table b { id int [pk] }\n\
+               Table c { id int [pk] a_id int [ref: > a.id] }";
+    let sc = parser::parse(src);
+    let (svg, _, _) = layout::build_svg(&sc);
+
+    // 收集节点框
+    let mut boxes: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for seg in svg.split("<g class=\"dx-tbl-hit\"").skip(1) {
+        let Some(rect) = seg.split("<rect ").nth(1) else {
+            continue;
+        };
+        let get = |k: &str| -> Option<f64> {
+            let i = rect.find(&format!("{k}=\""))?;
+            let rest = &rect[i + k.len() + 2..];
+            rest.split('"').next()?.parse().ok()
+        };
+        if let (Some(x), Some(y), Some(w), Some(h)) =
+            (get("x"), get("y"), get("width"), get("height"))
+        {
+            boxes.push((x, y, w, h));
+        }
+    }
+    assert_eq!(boxes.len(), 3, "应渲染三张表");
+
+    // 逐条路径采样，任何一点落进框内（内缩 1px 容差）即失败
+    let mut crossed = Vec::new();
+    for d in extract_edge_paths(&svg) {
+        for (x, y) in sample_polyline(&d) {
+            for (bx, by, bw, bh) in &boxes {
+                if x > bx + 1.0 && x < bx + bw - 1.0 && y > by + 1.0 && y < by + bh - 1.0 {
+                    crossed.push(d.clone());
+                }
+            }
+        }
+    }
+    assert!(crossed.is_empty(), "连线穿过了表节点: {crossed:?}");
+}
+
+/// 同列的两张表之间的外键，不得从源表身体里穿回去。
+///
+/// 旧实现用 `x1 <= x2` 判断出线侧，同列时两者 x 相同，恒判为「从右侧出」，
+/// 于是线从源表右边缘出发、却要往左走到目标，整条线横穿源表自身。
+#[test]
+fn same_column_edge_does_not_cross_its_own_table() {
+    // 网格布局下相邻索引的表同列（8 张表 → 3 列，index 0 和 3 同列）
+    let mut src = String::new();
+    for i in 0..9 {
+        src.push_str(&format!("Table t{i} {{ id int [pk] }}\n"));
+    }
+    // t3 与 t0 同在 col 0，让 t3 引用 t0
+    src.push_str("Ref: t3.id > t0.id");
+    let sc = parser::parse(&src);
+    let (svg, _, _) = layout::build_svg(&sc);
+
+    let mut boxes: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for seg in svg.split("<g class=\"dx-tbl-hit\"").skip(1) {
+        let Some(rect) = seg.split("<rect ").nth(1) else {
+            continue;
+        };
+        let get = |k: &str| -> Option<f64> {
+            let i = rect.find(&format!("{k}=\""))?;
+            let rest = &rect[i + k.len() + 2..];
+            rest.split('"').next()?.parse().ok()
+        };
+        if let (Some(x), Some(y), Some(w), Some(h)) =
+            (get("x"), get("y"), get("width"), get("height"))
+        {
+            boxes.push((x, y, w, h));
+        }
+    }
+    for d in extract_edge_paths(&svg) {
+        for (x, y) in sample_polyline(&d) {
+            for (bx, by, bw, bh) in &boxes {
+                assert!(
+                    !(x > bx + 1.0 && x < bx + bw - 1.0 && y > by + 1.0 && y < by + bh - 1.0),
+                    "连线 {d} 穿过了表框 ({bx},{by},{bw},{bh})"
+                );
+            }
+        }
+    }
+}
+
+/// 从画布 SVG 里取出所有连线的 `d`。
+fn extract_edge_paths(svg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = svg;
+    while let Some(i) = rest.find("<path d=\"") {
+        rest = &rest[i + 9..];
+        let Some(j) = rest.find('"') else { break };
+        let d = &rest[..j];
+        // 只有连线带 class="dx-edge"，箭头 marker 里的 path 没有
+        if rest[j..].starts_with("\" class=\"dx-edge\"") {
+            out.push(d.to_string());
+        }
+    }
+    out
+}
+
+/// 按 1px 步长采样折线（本实现产出的全是正交段，采样不会漏判）。
+fn sample_polyline(d: &str) -> Vec<(f64, f64)> {
+    let toks: Vec<&str> = d.split_whitespace().collect();
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    let mut p = (0.0f64, 0.0f64);
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i];
+        if let Some(v) = t.strip_prefix('M') {
+            let x: f64 = v.parse().unwrap_or(0.0);
+            let y: f64 = toks.get(i + 1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            p = (x, y);
+            pts.push(p);
+            i += 2;
+        } else if let Some(v) = t.strip_prefix('H') {
+            p.0 = v.parse().unwrap_or(p.0);
+            pts.push(p);
+            i += 1;
+        } else if let Some(v) = t.strip_prefix('V') {
+            p.1 = v.parse().unwrap_or(p.1);
+            pts.push(p);
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for w in pts.windows(2) {
+        let (x0, y0) = w[0];
+        let (x1, y1) = w[1];
+        let n = ((x1 - x0).abs() + (y1 - y0).abs()).ceil() as usize + 1;
+        for s in 0..=n {
+            let t = s as f64 / n as f64;
+            out.push((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t));
+        }
+    }
+    out
+}

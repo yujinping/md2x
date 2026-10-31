@@ -4,6 +4,7 @@
 //! - [`model`]：解析后的中间模型，刻意不做类型校验；
 //! - [`parser`]：宽容型词法扫描器，遇到不认识的块跳过而不整份失败；
 //! - [`layout`]：把 schema 排成可直接内联的 SVG；
+//! - [`route`]：画布连线的正交路由，保证路径不穿任何节点框；
 //! - [`render`]：表格与画布的 HTML 片段，配色走模板 CSS 变量。
 //!
 //! 对外只暴露两个入口：`to_html_body` 与 `to_markdown`，
@@ -15,6 +16,7 @@ pub mod layout;
 pub mod model;
 pub mod parser;
 pub mod render;
+pub mod route;
 
 pub use model::Schema;
 

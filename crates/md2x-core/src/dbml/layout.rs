@@ -8,6 +8,7 @@
 
 use super::model::Schema;
 use super::render::esc;
+use super::route;
 
 /// 单个表节点的固定宽度。
 const NODE_W: f64 = 260.0;
@@ -15,6 +16,7 @@ const NODE_W: f64 = 260.0;
 const ROW_H: f64 = 20.0;
 /// 表头高度。
 const HD_H: f64 = 30.0;
+
 /// 列间横向间距。
 const GAP_X: f64 = 120.0;
 /// 层间纵向间距。
@@ -62,6 +64,8 @@ fn col_tags(c: &super::model::Column, is_fk: bool) -> Vec<&'static str> {
 struct Placed {
     /// 表在 schema.tables 里的下标
     idx: usize,
+    /// 列槽位号：同一列内所有节点 x 相同，路由靠它判断「是否跨列」
+    col: usize,
     /// 左上角坐标
     x: f64,
     y: f64,
@@ -106,11 +110,16 @@ fn layout_grid(sc: &Schema) -> Vec<Placed> {
     let cell_w = NODE_W + GAP_X;
     let row_h = placed_row_height(sc) + GAP_Y;
     (0..n)
-        .map(|i| Placed {
-            idx: i,
-            x: PAD + (i % cols) as f64 * cell_w,
-            y: PAD + (i / cols) as f64 * row_h,
-            h: node_h(sc, i),
+        .map(|i| {
+            let c = i % cols;
+            let x = PAD + c as f64 * cell_w;
+            Placed {
+                idx: i,
+                col: col_slot(x),
+                x,
+                y: PAD + (i / cols) as f64 * row_h,
+                h: node_h(sc, i),
+            }
         })
         .collect()
 }
@@ -146,13 +155,28 @@ fn layout_layers(sc: &Schema, layer: &[usize], max_layer: usize) -> Vec<Placed> 
     slot.iter()
         .copied()
         .enumerate()
-        .map(|(i, (l, sub, y))| Placed {
-            idx: i,
-            x: layer_x[l] + sub as f64 * (NODE_W + GAP_X),
-            y,
-            h: node_h(sc, i),
+        .map(|(i, (l, sub, y))| {
+            let x = layer_x[l] + sub as f64 * (NODE_W + GAP_X);
+            Placed {
+                idx: i,
+                // 子列也算独立列：折行后第二子列与第一子列之间隔着 NODE_W+GAP_X，
+                // 路由把它们当「相邻列」用中间那条走廊，是成立的。
+                col: col_slot(x),
+                x,
+                y,
+                h: node_h(sc, i),
+            }
         })
         .collect()
+}
+
+/// 由 x 坐标反推列槽位号。
+///
+/// 两种布局都是「列槽位 × (NODE_W + GAP_X)」的整数倍网格，因此从 x 反推
+/// 比在布局时逐处手工传递 col 更可靠——布局里每加一条产出路径都得记得
+/// 带上 col，漏一处就会让路由把跨列边当作同列处理，直接穿表。
+fn col_slot(x: f64) -> usize {
+    (((x - PAD) / (NODE_W + GAP_X)).round()).max(0.0) as usize
 }
 
 /// 生成 (svg, 宽, 高)。
@@ -223,16 +247,95 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
         layout_layers(sc, &layer, max_layer)
     };
 
+    // ---- 连线路由（两遍）----
+    //
+    // 第一遍：用「尚未为总线让位」的节点位置规划走法，只为了知道需要几条车道；
+    // 第二遍：按车道数把节点整体下移/上移腾出总线区，再真正生成路径。
+    //
+    // 为什么必须分两遍：跨列边只能走顶部或底部总线（中间隔着整列节点，
+    // 没有任何走廊能直达），而总线的高度又取决于有**多少条**跨列边。
+    // 先定尺寸再规划就会漏掉这部分高度，总线被画在画布外面。
+    let mut raw: Vec<(usize, usize, f64, f64)> = Vec::new();
+    {
+        // 同一对表只画一条：两个方向都画会得到两条几乎重合的线
+        let mut seen = std::collections::HashSet::new();
+        for r in &sc.refs {
+            let (Some(f), Some(t)) = (find(&r.from_table), find(&r.to_table)) else {
+                continue;
+            };
+            // 自引用（`parent_id > id`）只会在表内部绕一小圈，
+            // 视觉上几乎总是压在表身上，收益远小于噪声，不画。
+            if f == t {
+                continue;
+            }
+            if !seen.insert((f.min(t), f.max(t))) {
+                continue;
+            }
+            let fy = HD_H + col_row(sc, f, &r.from_col) * ROW_H + ROW_H / 2.0;
+            let ty = HD_H + col_row(sc, t, &r.to_col) * ROW_H + ROW_H / 2.0;
+            raw.push((f, t, fy, ty));
+        }
+    }
+
+    // 节点区的纵向中点，用来决定跨列边走顶部还是底部总线（取近的一侧）
+    let mid_y = {
+        let lo = placed.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        let hi = placed
+            .iter()
+            .map(|p| p.y + p.h)
+            .fold(f64::MIN, f64::max);
+        (lo + hi) / 2.0
+    };
+
+    let geo: Vec<route::Box> = placed
+        .iter()
+        .map(|p| route::Box {
+            col: p.col,
+            x: p.x,
+            y: p.y,
+            h: p.h,
+        })
+        .collect();
+    let edges: Vec<route::Edge> = raw
+        .iter()
+        .map(|(f, t, fy, ty)| route::Edge {
+            from: i_of(&placed, *f),
+            to: i_of(&placed, *t),
+            from_dy: *fy,
+            to_dy: *ty,
+        })
+        .collect();
+    let plan = route::plan(&geo, &edges, mid_y);
+
+    // 腾出总线区：节点整体下移「顶部车道高度」，底部由总高度自动让出
+    let top_pad = route::top_reserved(&plan);
+    let bot_pad = route::bottom_reserved(&plan);
+    let geo: Vec<route::Box> = geo
+        .iter()
+        .map(|b| route::Box {
+            y: b.y + top_pad,
+            ..*b
+        })
+        .collect();
+    let placed: Vec<Placed> = placed
+        .into_iter()
+        .map(|p| Placed {
+            y: p.y + top_pad,
+            ..p
+        })
+        .collect();
+
+    // 最右列的走廊中线在节点右边缘外 60px，右边距必须容下它
     let total_w = placed
         .iter()
         .map(|p| p.x + NODE_W)
         .fold(0.0f64, f64::max)
-        + PAD;
+        + route::RIGHT_PAD;
     let total_h = placed
         .iter()
         .map(|p| p.y + p.h)
         .fold(0.0f64, f64::max)
-        + PAD;
+        + bot_pad.max(PAD);
 
     // 画布尺寸取整，避免浮点尾巴
     let (w, h) = (total_w.ceil(), total_h.ceil());
@@ -283,36 +386,14 @@ pub fn build_svg(sc: &Schema) -> (String, f64, f64) {
     }
 
     // 先画连线（在节点之下）
-    let pos: Vec<(usize, f64, f64, f64)> = placed
-        .iter()
-        .map(|p| (p.idx, p.x, p.y, p.h))
-        .collect();
-    let pos_of = |i: usize| pos.iter().find(|(idx, ..)| *idx == i).copied();
-
-    for r in &sc.refs {
-        let (Some(f), Some(t)) = (find(&r.from_table), find(&r.to_table)) else {
-            continue;
-        };
-        if f == t {
-            continue;
-        }
-        let (Some(fl), Some(tl)) = (pos_of(f), pos_of(t)) else {
-            continue;
-        };
-        // 计算列在表内的高度偏移
-        let fy = fl.2 + HD_H + col_row(sc, f, &r.from_col) * ROW_H + ROW_H / 2.0;
-        let ty = tl.2 + HD_H + col_row(sc, t, &r.to_col) * ROW_H + ROW_H / 2.0;
-        let (mut x1, mut x2) = (fl.1, tl.1);
-        // 从靠向对侧的那一边出线
-        let out_right = x1 <= x2;
-        if out_right {
-            x1 += NODE_W;
-        } else {
-            x2 += NODE_W;
-        }
-        let mid = (x1 + x2) / 2.0;
+    //
+    // 路径由 `route` 模块生成：正交折线，只走列间走廊与顶部/底部总线，
+    // 结构上不可能穿过任何节点框（见该模块顶部注释）。
+    let paths = route::emit(&geo, &edges, &plan, NODE_W, GAP_X, h);
+    for d in paths {
         svg.push_str(&format!(
-            "<path d=\"M{x1:.1} {fy:.1} C{mid:.1} {fy:.1},{mid:.1} {ty:.1},{x2:.1} {ty:.1}\" class=\"dx-edge\" marker-end=\"url(#dx-ah)\"/>"        ));
+            "<path d=\"{d}\" class=\"dx-edge\" marker-end=\"url(#dx-ah)\"/>"
+        ));
     }
 
     // 再画节点
@@ -454,6 +535,18 @@ fn col_row(sc: &Schema, t: usize, col: &str) -> f64 {
         .iter()
         .position(|c| c.name == col)
         .unwrap_or(0) as f64
+}
+
+/// 表下标 → 它在 `placed` 里的下标。
+///
+/// `placed` 与 `sc.tables` 顺序一致（两种布局都按 0..n 生成），所以两者
+/// 相同；但路由接口用的是 `placed` 下标，显式转换一次以免日后布局改成
+/// 重排顺序时出隐蔽错位。
+fn i_of(placed: &[Placed], table_idx: usize) -> usize {
+    placed
+        .iter()
+        .position(|p| p.idx == table_idx)
+        .unwrap_or(0)
 }
 
 /// 按字符数截断（中文按 2 宽处理不重要，只求不溢出）。
