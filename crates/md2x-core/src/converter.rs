@@ -1,5 +1,5 @@
 use crate::error::MpeError;
-use comrak::ComrakOptions;
+use comrak::Options;
 use regex::Regex;
 use std::collections::HashMap;
 use std::io::Read;
@@ -7,11 +7,14 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub fn convert_markdown_to_html(markdown: &str) -> Result<String, MpeError> {
-    let mut options = ComrakOptions::default();
+    let mut options = Options::default();
     options.extension.table = true;
     options.extension.tasklist = true;
     options.extension.strikethrough = true;
     options.extension.footnotes = true;
+    // CJK Friendly Emphasis：修复中文语境下「**粗体**」紧邻全角标点时不生效的问题，
+    // 仅影响此前渲染错误的场景，ASCII 行为不变（comrak 0.41+ 提供）
+    options.extension.cjk_friendly_emphasis = true;
     options.parse.smart = true;
     options.render.hardbreaks = true;
 
@@ -651,5 +654,21 @@ mod tests {
         // 两个链接都应存在
         let anchor_count = html.matches("<a ").count();
         assert!(anchor_count >= 2, "应至少渲染出两个链接，实际：{anchor_count}");
+    }
+
+    /// CJK Friendly Emphasis（comrak 0.41+）：紧邻全角标点的强调此前因
+    /// GFM 左右侧翼规则对 Unicode 标点的处理而失效，启用后应正常渲染
+    #[test]
+    fn 全角标点旁的强调生效() {
+        let html = convert_markdown_to_html("这是**重要**的说明。").unwrap();
+        assert!(
+            html.contains("<strong>重要</strong>"),
+            "全角标点旁的粗体应生效：{html}"
+        );
+        let html = convert_markdown_to_html("（**强调**）内容").unwrap();
+        assert!(
+            html.contains("<strong>强调</strong>"),
+            "全角括号旁的粗体应生效：{html}"
+        );
     }
 }

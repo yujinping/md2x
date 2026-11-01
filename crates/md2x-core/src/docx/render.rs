@@ -38,11 +38,13 @@ pub fn render_body(
     md: &str,
     md_file: &Path,
 ) -> Result<(String, RenderCtx), MpeError> {
-    let mut options = comrak::ComrakOptions::default();
+    let mut options = comrak::Options::default();
     options.extension.table = true;
     options.extension.tasklist = true;
     options.extension.strikethrough = true;
     options.extension.footnotes = true;
+    // 与 converter 同步启用（中文粗斜体边缘修复），保证 DOCX 与 HTML 渲染一致
+    options.extension.cjk_friendly_emphasis = true;
     options.parse.smart = true;
     options.render.hardbreaks = true;
 
@@ -511,7 +513,7 @@ fn render_list_item<'a>(
 ) {
     let value = &node.data.borrow().value;
     let (checked, is_task) = match value {
-        NodeValue::TaskItem(checked) => (*checked, true),
+        NodeValue::TaskItem(item) => (item.symbol, true),
         _ => (None, false),
     };
 
