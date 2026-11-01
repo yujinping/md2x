@@ -1,3 +1,21 @@
+## [1.6.0] - 2026-11-01
+
+### 🚀 Features
+
+- *(core)* Comrak 0.28 -> 0.59，启用 CJK Friendly Emphasis
+
+### 🐛 Bug Fixes
+
+- *(release)* CHANGELOG 改为打 tag 后生成，变更归入版本段落
+
+### 📚 Documentation
+
+- 补 v1.5.0 版本段落（tag 后重新生成 CHANGELOG）
+
+### ⚙️ Miscellaneous Tasks
+
+- Bundle identifier 改为 top.yujinping.md2x
+- Release v1.6.0
 ## [1.5.0] - 2026-11-01
 
 ### 🚀 Features
