@@ -13,8 +13,10 @@ const props = defineProps({
   folderOpen: Boolean,
   fileTreeVisible: Boolean,
   canFind: Boolean,
+  canEdit: Boolean,
+  editorVisible: Boolean,
 })
-const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'export-folder', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree', 'toggle-find'])
+const emit = defineEmits(['open-file', 'open-folder', 'export-pdf', 'save-pdf', 'show-html', 'export-doc', 'export-folder', 'nav-back', 'nav-forward', 'toggle-full-width', 'toggle-file-tree', 'toggle-find', 'toggle-editor'])
 const settings = useSettingsStore()
 // 文件夹聚合导出仅在文件夹视图下可用（需要整个目录作为输入）
 const hasFolder = computed(() => props.folderOpen)
@@ -107,6 +109,17 @@ function onToggleFullWidth() {
         @click="emit('toggle-find')"
       >
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2L14 14"/></svg>
+      </button>
+
+      <!-- 编辑源文件（预览 ⇄ 编辑切换） -->
+      <button
+        class="btn btn-icon"
+        :disabled="!canEdit"
+        :class="{ 'btn-active': editorVisible }"
+        :title="t(macKey ? 'editorToggleMac' : 'editorToggleWin', settings.lang)"
+        @click="emit('toggle-editor')"
+      >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M11.3 2.3l2.4 2.4L6.2 12.2l-3.2.6.6-3.2z"/><path d="M9.8 3.8l2.4 2.4"/></svg>
       </button>
 
       <!-- 文件树显示/隐藏（目录式切换；打开文件夹后出现） -->

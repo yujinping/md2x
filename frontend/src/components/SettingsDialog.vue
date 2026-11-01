@@ -234,6 +234,15 @@ const activeViewMode = computed(
   () => viewModes.find(m => m.value === settings.viewMode) || viewModes[2],
 )
 
+// ===== 编辑器模式：决定打开文件先看到什么（设置项与 store 对应） =====
+const editorModes = [
+  { value: 'preview', labelKey: 'editorModePreview', descKey: 'editorModePreviewDesc' },
+  { value: 'edit', labelKey: 'editorModeEdit', descKey: 'editorModeEditDesc' },
+]
+const activeEditorMode = computed(
+  () => editorModes.find(m => m.value === settings.editorMode) || editorModes[0],
+)
+
 // ===== 导出模版选择 =====
 // 预览与导出共用所选模版；列表由后端自动扫描模版目录（内置 + 目录包 + 旧式单文件）。
 // 模版包约定：<id>/template.html（入口）+ template.json（元数据）+ preview.*（缩略图）。
@@ -644,6 +653,28 @@ async function setDefault() {
                 {{ t(activeViewMode.descKey, settings.lang) }}
               </p>
               <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('viewNote', settings.lang) }}</p>
+            </div>
+
+            <!-- 编辑器模式：全预览（默认）/ 全时编辑 -->
+            <div class="mt-5 pt-4" :style="{ borderTop: '1px solid var(--border)' }">
+              <div class="text-xs font-semibold uppercase tracking-wider mb-3" :style="{ color: 'var(--text-muted)' }">{{ t('settingsEditorMode', settings.lang) }}</div>
+              <div class="grid grid-cols-2 gap-2 mb-2.5">
+                <button
+                  v-for="m in editorModes"
+                  :key="m.value"
+                  class="px-2 py-2.5 rounded-xl text-[13px] font-medium cursor-pointer transition-all duration-200"
+                  :style="{
+                    border: '1.5px solid ' + (settings.editorMode === m.value ? 'var(--accent)' : 'var(--border)'),
+                    background: settings.editorMode === m.value ? 'rgba(99,102,241,0.08)' : 'transparent',
+                    color: settings.editorMode === m.value ? 'var(--accent)' : 'var(--text)',
+                  }"
+                  @click="settings.setEditorMode(m.value)"
+                >{{ t(m.labelKey, settings.lang) }}</button>
+              </div>
+              <p class="text-xs leading-relaxed mb-1.5" :style="{ color: 'var(--text-muted)' }">
+                {{ t(activeEditorMode.descKey, settings.lang) }}
+              </p>
+              <p class="text-[11px]" :style="{ color: 'var(--text-dim)' }">{{ t('editorModeNote', settings.lang) }}</p>
             </div>
           </template>
 

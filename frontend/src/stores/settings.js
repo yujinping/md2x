@@ -10,6 +10,18 @@ const LS_TEMPLATE_ID = 'mpe-template-id'
 const LS_TOOLBAR_VISIBLE = 'mpe-toolbar-visible'
 const LS_TREE_VISIBLE = 'mpe-tree-visible'
 const LS_EXPORT_PRESETS = 'mpe-export-presets'
+const LS_EDITOR_MODE = 'mpe-editor-mode'
+
+/// 编辑器默认模式的合法档位：
+/// preview = 全预览（打开文件直接看渲染结果，默认）；
+/// edit = 全时编辑（打开文件直接进源码编辑，⌘E 随时看预览）。
+/// 存档脏值一律落回 preview：模式错了只是体验偏好，不值得为它抛错
+const EDITOR_MODE_VALUES = ['preview', 'edit']
+
+/// 归一化编辑器模式（导出供单测）：非法 / 缺失回退 fallback（默认 preview）
+export function normalizeEditorMode(saved, fallback = 'preview') {
+  return EDITOR_MODE_VALUES.includes(saved) ? saved : fallback
+}
 
 /// 预设允许的导出格式：与后端 export_<格式> 命令、菜单项一一对应。
 /// 白名单而不是「任意字符串」——存档里混进一个不存在的格式，
@@ -110,6 +122,9 @@ export const useSettingsStore = defineStore('settings', () => {
   // 全宽模式临时收起、打开/关闭文件夹这类流程性动作不写进来，
   // 否则下次启动的初始状态会被上一次的临时状态顶掉
   const treeVisible = ref(localStorage.getItem(LS_TREE_VISIBLE) !== '0')
+  // 编辑器默认模式：决定「打开文件先看到什么」。只影响新打开的文件，
+  // 不强制改变当前视图——用户正在看预览时改设置，屏幕不该跳
+  const editorMode = ref(normalizeEditorMode(localStorage.getItem(LS_EDITOR_MODE)))
 
   // 导出预设：把「格式 + 模版 + 主题 + 全宽」存成一组，菜单「文件 → 导出」直达。
   // 模版的可调变量不在预设里——它们按模版 id 存在后端，切模版自然跟着走；
@@ -202,6 +217,12 @@ export const useSettingsStore = defineStore('settings', () => {
     localStorage.setItem(LS_TREE_VISIBLE, val ? '1' : '0')
   }
 
+  function setEditorMode(val) {
+    if (!EDITOR_MODE_VALUES.includes(val)) return
+    editorMode.value = val
+    localStorage.setItem(LS_EDITOR_MODE, val)
+  }
+
   /// 把预设列表同步到原生菜单：菜单项 id 为 `preset:<预设 id>`，
   /// 点击后前端按 id 查表取出完整参数。失败只影响菜单入口，
   /// 设置面板里的列表照常可用，因此不抛错——注意 invoke 返回 Promise，
@@ -253,6 +274,7 @@ export const useSettingsStore = defineStore('settings', () => {
     bumpTemplateVars,
     toolbarVisible,
     treeVisible,
+    editorMode,
     exportPresets,
     setTheme,
     setLang,
@@ -261,6 +283,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setTemplateId,
     setToolbarVisible,
     setTreeVisible,
+    setEditorMode,
     syncPresetMenu,
     addExportPreset,
     removeExportPreset,
