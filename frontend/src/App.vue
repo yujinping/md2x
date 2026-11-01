@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { ask } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from './stores/settings.js'
 import { t } from './i18n/index.js'
 import Toolbar from './components/Toolbar.vue'
@@ -11,9 +12,11 @@ import AboutDialog from './components/AboutDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import PdfOverlay from './components/PdfOverlay.vue'
 import FileTree from './components/FileTree.vue'
+import EditorPane from './components/EditorPane.vue'
 import FindBar from './components/FindBar.vue'
 import PreviewContextMenu from './components/PreviewContextMenu.vue'
 import { injectFindRuntime } from './find-runtime.js'
+import { confirmClose } from './editor/close-guard.js'
 
 const settings = useSettingsStore()
 const previewState = ref(null)
@@ -27,6 +30,35 @@ const isGeneratingPdf = ref(false)
 const isFullscreen = ref(false)
 // 当前打开文件的完整路径，用于把相对链接解析为绝对路径
 const currentPath = ref('')
+
+// ===== 源文件编辑器（预览 ⇄ 编辑切换）=====
+const editorVisible = ref(false)
+// 编辑器当前文本（EditorPane @change 实时回写，唯一事实源在这里）
+const editorContent = ref('')
+// 最近一次读盘 / 保存的内容：dirty = editorContent !== savedContent。
+// 放弃修改的确认通过后也会把 savedContent 对齐到当前内容——
+// 目的只是让同一条操作链路上的第二次确认静默通过，随后切换文件会重新读盘
+const savedContent = ref('')
+// 编辑会话所属的文件路径：内容在内存里保留，切去预览「看一眼」不丢稿，
+// 同一文件 ⌘E 切回编辑器时直接恢复，不重读磁盘
+const editorSessionPath = ref('')
+// 读盘时刻的 mtime（Unix 毫秒），保存时原样带回做冲突比对
+const sourceMeta = ref({ mtimeMs: null })
+// 防止 Cmd+S 连按并发写盘
+const savingSource = ref(false)
+const editorRef = ref(null)
+
+// 编辑器高亮语言：按扩展名分流（dbml 用专用 StreamLanguage，其余走 markdown）
+const editorLang = computed(() => {
+  const m = /\.([A-Za-z0-9_+-]+)$/.exec(currentPath.value || '')
+  return m && m[1].toLowerCase() === 'dbml' ? 'dbml' : 'markdown'
+})
+
+const editorDirty = computed(
+  () =>
+    editorSessionPath.value === currentPath.value &&
+    editorContent.value !== savedContent.value,
+)
 
 // ===== 文件夹 / 文件树视图 =====
 const isFolderView = ref(false)
@@ -50,8 +82,11 @@ const findIndex = ref(0)
 const previewFrame = ref(null)
 let findTimer = null
 
-/// 查找能力仅适用于 HTML 预览：PDF 视图是插件渲染的位图，无法遍历 DOM
-const canFind = computed(() => hasFile.value && !isPdfView.value && typeof previewState.value === 'string')
+/// 查找能力仅适用于 HTML 预览：PDF 视图是插件渲染的位图，无法遍历 DOM；
+/// 编辑视图是纯文本编辑，同样没有页内查找
+const canFind = computed(
+  () => hasFile.value && !isPdfView.value && !editorVisible.value && typeof previewState.value === 'string',
+)
 
 function sendFind(action, query) {
   const win = previewFrame.value && previewFrame.value.contentWindow
@@ -125,6 +160,8 @@ function pushHistory(path) {
 
 /// 打开文件并渲染预览（不改动历史栈），前进/后退也走这里
 async function openFileAndRender(path) {
+  // 编辑器有未保存修改时先确认放弃（同链路上二次调用会静默通过）
+  if (!(await confirmDiscardEditor())) return
   currentPath.value = path
   previewState.value = null
   setStatus('statusGenerating', 'busy')
@@ -135,6 +172,12 @@ async function openFileAndRender(path) {
     return
   }
   await loadPreview()
+  // 编辑视图按需进入：已在编辑（切文件）就装入新文件源码；
+  // 全时编辑模式下新打开的文件也直接进编辑器（全预览模式则留在预览）
+  if (editorVisible.value || settings.editorMode === 'edit') {
+    const ok = await loadEditorSource()
+    editorVisible.value = ok
+  }
 }
 
 /// 打开文件并记入历史（链接点击 / 打开文件 / 拖拽均走此入口）
@@ -159,16 +202,18 @@ function isSupportedPath(p) {
   return supportedExts().includes(m[1].toLowerCase())
 }
 
-/// 后退：回到历史中的上一份文件
+/// 后退：回到历史中的上一份文件（有未保存修改时先确认，确认后才动历史指针）
 async function goBack() {
   if (!canGoBack.value) return
+  if (!(await confirmDiscardEditor())) return
   historyIndex.value -= 1
   await openFileAndRender(history.value[historyIndex.value])
 }
 
-/// 前进：回到历史中的下一份文件
+/// 前进：回到历史中的下一份文件（同后退）
 async function goForward() {
   if (!canGoForward.value) return
+  if (!(await confirmDiscardEditor())) return
   historyIndex.value += 1
   await openFileAndRender(history.value[historyIndex.value])
 }
@@ -208,6 +253,166 @@ async function loadPreview() {
   } catch (_) {}
 
   setStatus('statusPreviewReady', 'ready')
+}
+
+// ===== 源文件编辑器逻辑 =====
+
+/// 从后端读当前文件源码装进编辑器。失败（非 UTF-8 / 未打开）时退回预览并报错，
+/// 绝不让编辑器拿着 lossy 乱码继续编辑——那会在保存时毁了原文件
+async function loadEditorSource() {
+  try {
+    const src = await invoke('read_source')
+    editorContent.value = src.content
+    savedContent.value = src.content
+    sourceMeta.value = { mtimeMs: src.mtime_ms }
+    editorSessionPath.value = currentPath.value
+    return true
+  } catch (e) {
+    editorVisible.value = false
+    setStatus(t('editorReadFail', settings.lang) + '：' + e, 'error')
+    return false
+  }
+}
+
+/// 有未保存修改时弹确认（原生 ask，不可用时回退 window.confirm）。
+/// 确认后把 savedContent 对齐到当前内容：后续同链路上的二次确认会静默通过，
+/// 真正的状态以随后的重新读盘 / 文件切换为准
+async function confirmDiscardEditor() {
+  if (!editorDirty.value) return true
+  const msg = t('editorDiscardConfirm', settings.lang)
+  let ok = false
+  try {
+    ok = await ask(msg, { title: 'md2x', kind: 'warning' })
+  } catch (_) {
+    ok = window.confirm(msg)
+  }
+  if (ok) savedContent.value = editorContent.value
+  return ok
+}
+
+/// 预览 ⇄ 编辑切换（铅笔按钮与 ⌘E / Ctrl+E 共用）。
+/// 切去预览只是「看一眼」：编辑会话（含未保存修改）原样保留在内存里，
+/// 同一文件再切回来直接恢复，不重读磁盘；换文件才需要重新读源
+let lastEditorToggleAt = 0
+async function toggleEditor() {
+  // 菜单加速键与 window keydown 在部分平台会同时送达，双触发等于
+  // 切进又切出；150ms 内的重复调用直接忽略
+  const now = Date.now()
+  if (now - lastEditorToggleAt < 150) return
+  lastEditorToggleAt = now
+  if (!hasFile.value) return
+  if (editorVisible.value) {
+    editorVisible.value = false
+    loadPreview()
+    return
+  }
+  closeFind()
+  isPdfView.value = false
+  if (
+    editorSessionPath.value === currentPath.value &&
+    editorContent.value
+  ) {
+    // 同一文件的编辑会话还在：直接恢复
+    editorVisible.value = true
+    nextTick(() => editorRef.value?.focus())
+    return
+  }
+  // 新会话：若上个文件有未保存修改，先确认放弃
+  if (!(await confirmDiscardEditor())) return
+  if (!(await loadEditorSource())) return // 读源失败已退回预览
+  editorVisible.value = true
+  nextTick(() => editorRef.value?.focus())
+}
+
+/// 保存编辑器内容到源文件（Cmd/S S 与后续菜单共用的唯一保存入口）。
+/// 磁盘 mtime 与读取时不符 → 弹确认后 force 覆盖；成功后主动 loadPreview，
+/// 不等 1.5s 轮询（后端 write_source 已同步 last_known_mtime，轮询不会重复触发）
+async function saveSource() {
+  if (!editorVisible.value || savingSource.value || !editorDirty.value) return
+  savingSource.value = true
+  try {
+    let out
+    try {
+      out = await invoke('write_source', {
+        content: editorContent.value,
+        baseMtimeMs: sourceMeta.value.mtimeMs,
+        force: false,
+      })
+    } catch (e) {
+      setStatus(t('editorSaveFail', settings.lang) + '：' + e, 'error')
+      return
+    }
+    if (out.status === 'conflict') {
+      const msg = t('editorConflict', settings.lang)
+      let ok = false
+      try {
+        ok = await ask(msg, { title: 'md2x', kind: 'warning' })
+      } catch (_) {
+        ok = window.confirm(msg)
+      }
+      if (!ok) return
+      try {
+        out = await invoke('write_source', {
+          content: editorContent.value,
+          baseMtimeMs: out.current_mtime_ms,
+          force: true,
+        })
+      } catch (e) {
+        setStatus(t('editorSaveFail', settings.lang) + '：' + e, 'error')
+        return
+      }
+    }
+    savedContent.value = editorContent.value
+    if (out.status === 'saved') sourceMeta.value = { mtimeMs: out.mtime_ms }
+    setStatus(t('editorSaved', settings.lang), 'ready')
+    loadPreview()
+  } finally {
+    savingSource.value = false
+  }
+}
+
+/// EditorPane 文档变化回写（dirty 由 computed 派生，无需额外标记）
+function onEditorChange(v) {
+  editorContent.value = v
+}
+
+/// 菜单「编辑 → 复制」：按当前视图取选中文本写剪贴板。
+/// 编辑器：CodeMirror 选区（组件暴露 getSelection）；
+/// 预览：srcdoc 同源 iframe 可直接读 getSelection()；
+/// PDF 视图是插件渲染的位图，没有可取的文本选区，只提示不支持。
+async function copySelectedText() {
+  if (!hasFile.value) return
+  let text = ''
+  if (isPdfView.value) {
+    setStatus(t('copyNotSupportedPdf', settings.lang), 'ready')
+    return
+  }
+  if (editorVisible.value) {
+    text = editorRef.value?.getSelection?.() || ''
+  } else {
+    try {
+      const sel = previewFrame.value?.contentWindow?.getSelection()
+      text = sel ? sel.toString() : ''
+    } catch (_) {
+      text = ''
+    }
+  }
+  if (!text) {
+    setStatus(t('copyNothingSelected', settings.lang), 'ready')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    setStatus(t('copied', settings.lang), 'ready')
+  } catch (_) {
+    // WebView 剪贴板 API 不可用时回退后端写剪贴板
+    try {
+      await invoke('copy_text', { text })
+      setStatus(t('copied', settings.lang), 'ready')
+    } catch (e) {
+      setStatus(t('copyFail', settings.lang) + '：' + e, 'error')
+    }
+  }
 }
 
 /// 向内嵌预览 HTML 注入点击拦截脚本：
@@ -350,6 +555,8 @@ function onIframeMessage(e) {
 }
 
 async function onExportPdf() {
+  // 编辑器有未保存修改时生成的是旧内容的 PDF，先确认
+  if (!(await confirmDiscardEditor())) return
   if (previewState.value && isPdfView.value) {
     showPdfViewer(previewState.value)
     return
@@ -378,6 +585,8 @@ async function onExportPdf() {
 }
 
 function showPdfViewer(r) {
+  // 进入 PDF 视图时编辑器随预览一起让位（dirty 已在入口处确认过）
+  editorVisible.value = false
   isPdfView.value = true
   fileName.value = r.file_name || ''
 }
@@ -511,6 +720,12 @@ function showHtmlPreview() {
 
 /// 卸载当前预览的文件（前端状态 + 后端当前文件），回到默认欢迎视图
 async function resetCurrentFile() {
+  if (!(await confirmDiscardEditor())) return
+  editorVisible.value = false
+  editorContent.value = ''
+  savedContent.value = ''
+  sourceMeta.value = { mtimeMs: null }
+  editorSessionPath.value = ''
   previewState.value = null
   hasFile.value = false
   fileName.value = ''
@@ -629,13 +844,19 @@ async function closeCurrentFile() {
 /// 不回写则菜单勾选会与实际显示不一致
 function syncMenuState() {
   const enabled = isFolderView.value || !!folderTree.value
+  // 状态位收成一个快照结构体（后端 MenuStatePatch），后续加菜单项只动一处
   invoke('sync_menu_state', {
-    treeVisible: fileTreeVisible.value,
-    treeEnabled: enabled,
-    fullWidth: settings.fullWidth,
-    toolbarVisible: settings.toolbarVisible,
-    hasFile: hasFile.value,
-    hasFolder: isFolderView.value && !!folderTree.value,
+    st: {
+      treeVisible: fileTreeVisible.value,
+      treeEnabled: enabled,
+      fullWidth: settings.fullWidth,
+      toolbarVisible: settings.toolbarVisible,
+      hasFile: hasFile.value,
+      hasFolder: isFolderView.value && !!folderTree.value,
+      // 「编辑源码」勾选 = 编辑器可见；PDF 视图无源码可编，整项置灰
+      editorVisible: editorVisible.value,
+      editorEnabled: hasFile.value && !isPdfView.value,
+    },
   }).catch(() => {})
 }
 
@@ -862,6 +1083,14 @@ onMounted(async () => {
     try {
       if (await invoke('check_file_changed')) {
         await loadPreview()
+        // 编辑器开着或存在该文件的编辑会话且无未保存修改：跟随磁盘刷新内容；
+        // 有修改则不动，等保存时走 write_source 的冲突确认
+        if (
+          (editorVisible.value || editorSessionPath.value === currentPath.value) &&
+          !editorDirty.value
+          ) {
+          await loadEditorSource()
+        }
       }
     } catch (_) {}
   }, 1500)
@@ -874,6 +1103,8 @@ onMounted(async () => {
       if (await invoke('check_toggle_tree')) toggleFileTree()
       if (await invoke('check_toggle_toolbar')) settings.setToolbarVisible(!settings.toolbarVisible)
       if (await invoke('check_toggle_fullwidth')) toggleFullWidth()
+      if (await invoke('check_toggle_editor')) toggleEditor()
+      if (await invoke('check_copy_selection')) copySelectedText()
       if (await invoke('check_show_open_folder')) onOpenFolder()
       if (await invoke('check_show_close_folder')) closeFolder()
       const fmt = await invoke('check_menu_export')
@@ -889,6 +1120,8 @@ onMounted(async () => {
   watch(() => settings.toolbarVisible, syncMenuState, { immediate: true })
   // 有没有可导出的内容决定「导出 ▸」整组是否可用
   watch([hasFile, isFolderView], syncMenuState)
+  // 编辑器可见性与 PDF 视图变化影响「编辑源码」勾选与置灰，同步回菜单
+  watch([editorVisible, isPdfView], syncMenuState)
   // 预设 → 原生菜单：启动时铺一次（变更时由 store 的 persistPresets 重建）。
   // 菜单在后端 setup 阶段建好，挂载时 append 才安全
   settings.syncPresetMenu()
@@ -904,6 +1137,24 @@ onMounted(async () => {
   try {
     await listen('md2x://drag-state', (e) => {
       isDragging.value = !!e.payload
+    })
+  } catch (_) {}
+  // 窗口关闭拦截：Rust 侧拦下 CloseRequested 后发事件来询问，
+  // 有未保存修改时确认放弃才真正关闭（force_close 走 destroy，不再触发拦截）
+  try {
+    await listen('md2x://close-requested', async () => {
+      const ok = await confirmClose(
+        editorDirty.value,
+        async (m) => {
+          try {
+            return await ask(m, { title: 'md2x', kind: 'warning' })
+          } catch (_) {
+            return window.confirm(m)
+          }
+        },
+        t('editorCloseConfirm', settings.lang),
+      )
+      if (ok) invoke('force_close').catch(() => {})
     })
   } catch (_) {}
   // 兜底：后端事件若因异常丢失（如拖入途中窗口失焦），高亮会一直挂着。
@@ -956,6 +1207,15 @@ onMounted(async () => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'f' && !e.shiftKey) {
       e.preventDefault()
       openFind()
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      // Cmd/Ctrl+S 保存源文件：编辑视图下才生效；编辑器内聚焦时按键也会
+      // 冒泡到 window，这里统一收口避免 CodeMirror 内外双触发
+      e.preventDefault()
+      saveSource()
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+      // ⌘/Ctrl+E 预览 ⇄ 编辑切换（编辑器内聚焦时按键也会冒泡到 window，统一收口）
+      e.preventDefault()
+      toggleEditor()
     } else if (e.altKey && e.key === 'ArrowLeft') {
       e.preventDefault()
       goBack()
@@ -979,6 +1239,9 @@ onMounted(async () => {
       :folder-open="isFolderView && !!folderTree"
       :file-tree-visible="fileTreeVisible"
       :can-find="canFind"
+      :can-edit="hasFile && !isPdfView"
+      :editor-visible="editorVisible"
+      @toggle-editor="toggleEditor"
       @toggle-find="showFind ? closeFind() : openFind()"
       @open-file="onOpenFile"
       @open-folder="onOpenFolder"
@@ -1014,8 +1277,18 @@ onMounted(async () => {
       <main class="flex-1 min-w-0 overflow-hidden bg-white relative">
         <Welcome v-if="!hasFile" />
 
+        <!-- 源文件编辑视图：CodeMirror 编辑器替代预览 iframe -->
+        <EditorPane
+          v-else-if="editorVisible"
+          ref="editorRef"
+          :content="editorContent"
+          :dark="settings.theme === 'dark'"
+          :language="editorLang"
+          @change="onEditorChange"
+        />
+
         <iframe
-          v-if="hasFile && !isPdfView && previewState"
+          v-else-if="!isPdfView && previewState"
           ref="previewFrame"
           :srcdoc="typeof previewState === 'string' ? previewState : ''"
           class="w-full h-full border-none block"
@@ -1025,7 +1298,7 @@ onMounted(async () => {
         />
 
         <iframe
-          v-if="hasFile && isPdfView && previewState && typeof previewState !== 'string'"
+          v-else-if="isPdfView && previewState && typeof previewState !== 'string'"
           :src="'data:application/pdf;base64,' + previewState.base64"
           class="w-full h-full border-none block"
         />

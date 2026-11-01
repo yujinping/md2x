@@ -595,8 +595,9 @@ struct AppState {
     settings_flag: Mutex<bool>,
     /// 当前打开的文件夹根目录（文件树视图），None 表示单文件视图
     folder_root: Mutex<Option<PathBuf>>,
-    /// 顶级菜单「文件」/「视图」：切语言时要改标题，故需持有句柄
+    /// 顶级菜单「文件」/「编辑」/「视图」：切语言时要改标题，故需持有句柄
     file_menu: Mutex<Option<Submenu<tauri::Wry>>>,
+    edit_menu: Mutex<Option<Submenu<tauri::Wry>>>,
     view_menu: Mutex<Option<Submenu<tauri::Wry>>>,
     about_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     settings_item: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -629,6 +630,15 @@ struct AppState {
     show_open_folder_flag: Mutex<bool>,
     /// 菜单「关闭文件夹」点击标记，前端轮询消费
     close_folder_flag: Mutex<bool>,
+    /// 「编辑 → 编辑源码」勾选项：状态由前端编辑器可见性决定，需双向同步
+    editor_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// 「编辑 → 复制」项：预览在 iframe 里、系统复制选择器够不到，
+    /// 点击后交前端按当前视图（预览/编辑）取选区写剪贴板
+    copy_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// 菜单「编辑源码」点击标记，前端轮询消费（真正切换与勾选由前端回写）
+    toggle_editor_flag: Mutex<bool>,
+    /// 菜单「复制」点击标记，前端轮询消费
+    copy_selection_flag: Mutex<bool>,
     /// 「导出 ▸」子菜单：切语言要改标题、无文件时要整组置灰，故需持有句柄
     export_menu: Mutex<Option<Submenu<tauri::Wry>>>,
     /// 「导出 ▸」各格式项：无文件/无文件夹时分别置灰
@@ -695,6 +705,11 @@ pub fn run() {
         toggle_fullwidth_flag: Mutex::new(false),
         show_open_folder_flag: Mutex::new(false),
         close_folder_flag: Mutex::new(false),
+        edit_menu: Mutex::new(None),
+        editor_item: Mutex::new(None),
+        copy_item: Mutex::new(None),
+        toggle_editor_flag: Mutex::new(false),
+        copy_selection_flag: Mutex::new(false),
         export_menu: Mutex::new(None),
         export_folder_item: Mutex::new(None),
         export_html_item: Mutex::new(None),
@@ -848,6 +863,28 @@ pub fn run() {
                 .item(&close_file_item)
                 .item(&close_folder_item)
                 .build()?;
+            // ===== 编辑菜单：源码编辑开关 + 选中文本复制 =====
+            // 「编辑源码」与工具栏铅笔、⌘E 同一状态（前端编辑器可见性），
+            // 勾选由前端 sync_menu_state 回写；⌘E 注册在菜单上后会拦住
+            // webview 的同名按键（菜单加速键优先），toggle 由前端轮询消费
+            let editor_item: CheckMenuItem<tauri::Wry> =
+                tauri::menu::CheckMenuItemBuilder::with_id("toggle_editor", "编辑源码")
+                    .checked(false)
+                    .accelerator("CmdOrCtrl+E")
+                    .build(app)?;
+            // 「复制」不用 PredefinedMenuItem::copy：预览正文在 iframe 里，
+            // 系统复制选择器够不到；统一由前端按当前视图取选区再写剪贴板，
+            // 编辑器走 CodeMirror 选区，预览走 iframe（srcdoc 同源可直接读）
+            let copy_item: MenuItem<tauri::Wry> =
+                tauri::menu::MenuItemBuilder::with_id("copy_selection", "复制")
+                    .accelerator("CmdOrCtrl+C")
+                    .build(app)?;
+            let edit_menu: Submenu<tauri::Wry> = tauri::menu::SubmenuBuilder::new(app, "编辑")
+                .item(&editor_item)
+                .separator()
+                .item(&copy_item)
+                .build()?;
+
             let view_menu: Submenu<tauri::Wry> = tauri::menu::SubmenuBuilder::new(app, "视图")
                 .item(&toggle_toolbar_item)
                 .item(&toggle_tree_item)
@@ -858,7 +895,7 @@ pub fn run() {
                 .build()?;
 
             let menu = tauri::menu::MenuBuilder::new(app)
-                .items(&[&app_menu, &file_menu, &view_menu])
+                .items(&[&app_menu, &file_menu, &edit_menu, &view_menu])
                 .build()?;
             app.set_menu(menu)?;
             // 保存菜单项引用供语言切换与状态同步
@@ -875,7 +912,10 @@ pub fn run() {
                 *state.fullwidth_item.lock().unwrap() = Some(fullwidth_item);
                 *state.fullscreen_item.lock().unwrap() = Some(fullscreen_item);
                 *state.file_menu.lock().unwrap() = Some(file_menu);
+                *state.edit_menu.lock().unwrap() = Some(edit_menu);
                 *state.view_menu.lock().unwrap() = Some(view_menu);
+                *state.editor_item.lock().unwrap() = Some(editor_item);
+                *state.copy_item.lock().unwrap() = Some(copy_item);
                 *state.export_menu.lock().unwrap() = Some(export_menu);
                 *state.export_folder_item.lock().unwrap() = Some(export_folder_item);
                 *state.export_html_item.lock().unwrap() = Some(export_html_item);
@@ -966,6 +1006,21 @@ pub fn run() {
             "quit" => {
                 app.exit(0);
             }
+            // 编辑菜单：只记请求，真正切换/复制都由前端按当前视图执行
+            "toggle_editor" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.toggle_editor_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
+            "copy_selection" => {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut flag) = state.copy_selection_flag.lock() {
+                        *flag = true;
+                    }
+                }
+            }
             // 导出子菜单：只记录请求，真正的保存对话框与写盘都在前端
             // （与工具栏按钮、预览右键菜单共用同一实现，避免两条导出链路跑偏）。
             // 预设项走同一个通道，存 `preset:<id>`，参数由前端查本地预设表
@@ -984,6 +1039,8 @@ pub fn run() {
             set_file,
             get_html,
             read_file_chunk,
+            read_source,
+            write_source,
             preview_pdf,
             save_pdf_as,
             export_html,
@@ -1005,6 +1062,8 @@ pub fn run() {
             check_toggle_tree,
             check_toggle_toolbar,
             check_toggle_fullwidth,
+            check_toggle_editor,
+            check_copy_selection,
             toggle_fullscreen,
             sync_menu_state,
             set_menu_language,
@@ -1026,6 +1085,7 @@ pub fn run() {
             check_external_tools,
             repo_relative_path,
             copy_text,
+            force_close,
             export_markdown,
             get_render_types,
             set_render_types,
@@ -1035,6 +1095,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error")
         .run(|handle, event| {
+            // 点窗口红叉（以及程序化 window.close()）先拦下来：
+            // 有没有未保存的编辑只有前端知道，把决定权交给编辑器状态。
+            // 前端确认后走 force_close（destroy），不会再触发本分支。
+            // Cmd/Ctrl+Q 退出走 ExitRequested，不经这里，正常退出不受影响。
+            if let tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } = &event
+            {
+                api.prevent_close();
+                if let Some(w) = handle.get_webview_window("main") {
+                    let _ = w.emit("md2x://close-requested", ());
+                }
+            }
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = event {
                 for url in urls {
@@ -1137,6 +1211,129 @@ fn read_file_chunk(path: String, offset: usize) -> Result<(String, bool), String
         String::from_utf8_lossy(&data[offset..end]).to_string(),
         end >= data.len(),
     ))
+}
+
+/// 编辑器读到的源码内容与读取时刻的 mtime（毫秒时间戳）。
+/// mtime 随内容一起返回，保存时原样带回做冲突比对，前端不必再查一次。
+#[derive(Serialize, Debug)]
+struct SourceContent {
+    /// 源文件全文（UTF-8）
+    content: String,
+    /// 读取时刻的文件 mtime（Unix 毫秒）；拿不到时为 None（仅理论情况）
+    mtime_ms: Option<u64>,
+}
+
+/// 写入结果：`saved` 表示已落盘（mtime_ms 为写入后的新 mtime，前端记下作为下次保存的基准）；
+/// `conflict` 表示磁盘文件在编辑期间被外部改动，需前端弹「覆盖 / 放弃」，`force = true` 才真写。
+#[derive(Serialize, Debug)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum WriteOutcome {
+    /// 保存成功
+    Saved {
+        /// 写入后的新 mtime（Unix 毫秒）
+        mtime_ms: u64,
+    },
+    /// 磁盘文件与 base_mtime_ms 不符，被外部改动过
+    Conflict {
+        /// 磁盘上当前的 mtime（Unix 毫秒），文件已被删除时为 None
+        current_mtime_ms: Option<u64>,
+    },
+}
+
+/// 把文件 mtime 折算成毫秒时间戳（Unix 纪元起）。文件不存在或时间早于纪元时返回 None。
+fn mtime_ms_of(path: &Path) -> Option<u64> {
+    let m = std::fs::metadata(path).ok()?.modified().ok()?;
+    m.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
+/// 读取源码实现（与 Tauri 命令解耦，便于单元测试）。
+/// 非 UTF-8 文件显式报错：整个渲染链路都是 UTF-8 假定，与其让编辑器把乱码
+/// 写回原文件，不如一开始就拒绝编辑——写坏原文件是这个功能唯一不可逆的后果。
+fn read_source_impl(path: &Path) -> Result<SourceContent, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("读取源文件失败: {e}"))?;
+    let content = String::from_utf8(bytes)
+        .map_err(|_| "文件不是有效的 UTF-8 编码，无法编辑（请先转码）".to_string())?;
+    Ok(SourceContent {
+        content,
+        mtime_ms: mtime_ms_of(path),
+    })
+}
+
+/// 写入源码实现（与 Tauri 命令解耦，便于单元测试）。
+/// `base_mtime_ms` 是前端读取（或上次保存）时的 mtime；磁盘 mtime 与之不符说明
+/// 文件被外部改动过，返回 Conflict 交前端确认，`force = true` 才覆盖。
+/// 写入走同目录临时文件 + rename，保证原文件要么是旧内容要么是新内容，不会出现半截文件。
+fn write_source_impl(
+    path: &Path,
+    content: &str,
+    base_mtime_ms: Option<u64>,
+    force: bool,
+) -> Result<WriteOutcome, String> {
+    if !force {
+        let cur = mtime_ms_of(path);
+        if cur != base_mtime_ms {
+            return Ok(WriteOutcome::Conflict {
+                current_mtime_ms: cur,
+            });
+        }
+    }
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("source");
+    let tmp = dir.join(format!(".{name}.md2x-tmp"));
+    std::fs::write(&tmp, content).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        // rename 失败时清掉临时文件，不在用户目录留垃圾
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("写回源文件失败: {e}"));
+    }
+    Ok(WriteOutcome::Saved {
+        mtime_ms: mtime_ms_of(path).unwrap_or(0),
+    })
+}
+
+/// 读取当前打开文件的源码（编辑器数据源）。只允许读当前文件，不接受任意路径。
+#[tauri::command]
+fn read_source(s: State<AppState>) -> Result<SourceContent, String> {
+    let p = s
+        .current_file
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    match p {
+        Some(p) => read_source_impl(&p),
+        None => Err("当前没有打开的文件".to_string()),
+    }
+}
+
+/// 保存当前打开文件的源码。成功后把 last_known_mtime 同步为新值，
+/// 这样 1.5s 轮询不会把这次保存误报成「外部修改」触发多余的重渲染。
+#[tauri::command]
+fn write_source(
+    content: String,
+    base_mtime_ms: Option<u64>,
+    force: bool,
+    s: State<AppState>,
+) -> Result<WriteOutcome, String> {
+    let p = s
+        .current_file
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone();
+    let Some(p) = p else {
+        return Err("当前没有打开的文件".to_string());
+    };
+    let out = write_source_impl(&p, &content, base_mtime_ms, force)?;
+    if matches!(out, WriteOutcome::Saved { .. }) {
+        if let Ok(mut stored) = s.last_known_mtime.lock() {
+            *stored = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
+        }
+    }
+    Ok(out)
 }
 
 /// 设置当前文件，记录初始 mtime 供前端轮询检测变更
@@ -1248,6 +1445,24 @@ fn check_toggle_toolbar(s: State<AppState>) -> bool {
 #[tauri::command]
 fn check_toggle_fullwidth(s: State<AppState>) -> bool {
     let mut guard = s.toggle_fullwidth_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「编辑 → 编辑源码」是否被点击
+#[tauri::command]
+fn check_toggle_editor(s: State<AppState>) -> bool {
+    let mut guard = s.toggle_editor_flag.lock().unwrap();
+    let val = *guard;
+    *guard = false;
+    val
+}
+
+/// 前端轮询：检查菜单「编辑 → 复制」是否被点击
+#[tauri::command]
+fn check_copy_selection(s: State<AppState>) -> bool {
+    let mut guard = s.copy_selection_flag.lock().unwrap();
     let val = *guard;
     *guard = false;
     val
@@ -1365,36 +1580,61 @@ fn set_export_presets(
     Ok(())
 }
 
+/// 前端回写的菜单状态快照（见 [`sync_menu_state`]）。
+///
+/// 收成结构体而不是摊平在参数列表里：状态位已有 8 个且还会随菜单项增长，
+/// 摊平会触发 `clippy::too_many_arguments`，结构体也便于整体扩展
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MenuStatePatch {
+    /// 目录树可见性
+    tree_visible: bool,
+    /// 目录树是否可用（单文件视图下置灰）
+    tree_enabled: bool,
+    /// 全宽显示
+    full_width: bool,
+    /// 工具栏可见性
+    toolbar_visible: bool,
+    /// 当前是否有打开的文件
+    has_file: bool,
+    /// 是否处于文件夹视图
+    has_folder: bool,
+    /// 源码编辑器是否可见（决定「编辑源码」勾选）
+    editor_visible: bool,
+    /// 「编辑源码」是否可用（PDF 视图无源码，置灰）
+    editor_enabled: bool,
+}
+
 /// 前端回写菜单状态：目录树/工具栏可见性、全宽状态与勾选保持一致。
 /// 前端是这些状态的唯一来源（工具栏按钮、全宽模式、打开文件夹、设置项都会改变它们），
 /// 因此每次变化都需要把结果同步回菜单，否则勾选会与实际显示不符。
 #[tauri::command]
-fn sync_menu_state(
-    tree_visible: bool,
-    tree_enabled: bool,
-    full_width: bool,
-    toolbar_visible: bool,
-    has_file: bool,
-    has_folder: bool,
-    s: State<AppState>,
-) -> Result<(), String> {
+fn sync_menu_state(st: MenuStatePatch, s: State<AppState>) -> Result<(), String> {
+    // 「编辑源码」勾选项：勾选 = 编辑器可见；PDF 视图无源码可编辑，整项置灰
+    {
+        let item = s.editor_item.lock().map_err(|e| e.to_string())?;
+        if let Some(ref it) = *item {
+            it.set_enabled(st.editor_enabled).ok();
+            it.set_checked(st.editor_visible).ok();
+        }
+    }
     {
         let item = s.toggle_tree_item.lock().map_err(|e| e.to_string())?;
         if let Some(ref it) = *item {
-            it.set_enabled(tree_enabled).ok();
-            it.set_checked(tree_visible && tree_enabled).ok();
+            it.set_enabled(st.tree_enabled).ok();
+            it.set_checked(st.tree_visible && st.tree_enabled).ok();
         }
     }
     {
         let item = s.fullwidth_item.lock().map_err(|e| e.to_string())?;
         if let Some(ref it) = *item {
-            it.set_checked(full_width).ok();
+            it.set_checked(st.full_width).ok();
         }
     }
     {
         let item = s.toggle_toolbar_item.lock().map_err(|e| e.to_string())?;
         if let Some(ref it) = *item {
-            it.set_checked(toolbar_visible).ok();
+            it.set_checked(st.toolbar_visible).ok();
         }
     }
     // 导出组：没有可导出的内容时整组置灰，比点了再报错更符合预期；
@@ -1402,14 +1642,14 @@ fn sync_menu_state(
     {
         let item = s.export_menu.lock().map_err(|e| e.to_string())?;
         if let Some(ref it) = *item {
-            it.set_enabled(has_file || has_folder).ok();
+            it.set_enabled(st.has_file || st.has_folder).ok();
         }
     }
     for (slot, enabled) in [
-        (&s.export_html_item, has_file),
-        (&s.export_pdf_item, has_file),
-        (&s.export_docx_item, has_file),
-        (&s.export_folder_item, has_folder),
+        (&s.export_html_item, st.has_file),
+        (&s.export_pdf_item, st.has_file),
+        (&s.export_docx_item, st.has_file),
+        (&s.export_folder_item, st.has_folder),
     ] {
         let item = slot.lock().map_err(|e| e.to_string())?;
         if let Some(ref it) = *item {
@@ -1524,6 +1764,7 @@ fn set_menu_language(lang: String, s: State<AppState>) -> Result<(), String> {
     }
 
     let file_menu = s.file_menu.lock().map_err(|e| e.to_string())?;
+    let edit_menu = s.edit_menu.lock().map_err(|e| e.to_string())?;
     let view_menu = s.view_menu.lock().map_err(|e| e.to_string())?;
     let about = s.about_item.lock().map_err(|e| e.to_string())?;
     let quit = s.quit_item.lock().map_err(|e| e.to_string())?;
@@ -1540,10 +1781,13 @@ fn set_menu_language(lang: String, s: State<AppState>) -> Result<(), String> {
     let toggle_toolbar = s.toggle_toolbar_item.lock().map_err(|e| e.to_string())?;
     let fullwidth = s.fullwidth_item.lock().map_err(|e| e.to_string())?;
     let fullscreen = s.fullscreen_item.lock().map_err(|e| e.to_string())?;
+    let editor_item = s.editor_item.lock().map_err(|e| e.to_string())?;
+    let copy_item = s.copy_item.lock().map_err(|e| e.to_string())?;
     let settings = s.settings_item.lock().map_err(|e| e.to_string())?;
 
     // 顶级菜单
     set_text!(file_menu, "文件", "File");
+    set_text!(edit_menu, "编辑", "Edit");
     set_text!(view_menu, "视图", "View");
     // 应用菜单
     set_text!(about, "关于", "About");
@@ -1559,6 +1803,9 @@ fn set_menu_language(lang: String, s: State<AppState>) -> Result<(), String> {
     set_text!(export_html, "HTML", "HTML");
     set_text!(export_pdf, "PDF", "PDF");
     set_text!(export_docx, "Word（docx）", "Word (DOCX)");
+    // 编辑菜单
+    set_text!(editor_item, "编辑源码", "Edit Source");
+    set_text!(copy_item, "复制", "Copy");
     // 视图菜单
     set_text!(toggle_toolbar, "显示工具栏", "Show Toolbar");
     set_text!(toggle_tree, "显示目录树", "Show Directory Tree");
@@ -2764,6 +3011,13 @@ fn copy_text(text: String) -> Result<(), String> {
     platform_copy_clipboard(&text)
 }
 
+/// 关闭主窗口。只允许在前端确认过「放弃未保存修改」之后调用：
+/// destroy() 不触发 CloseRequested，因此不会撞上我们自己的关闭拦截形成死循环
+#[tauri::command]
+fn force_close(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.destroy().map_err(|e| e.to_string())
+}
+
 #[cfg(target_os = "macos")]
 fn platform_copy_clipboard(text: &str) -> Result<(), String> {
     use std::io::Write;
@@ -3615,6 +3869,81 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("不支持的文件类型"), "错误信息应可操作: {err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 编辑器读取：UTF-8 文件正常返回内容与 mtime；非 UTF-8 显式报错，
+    /// 绝不能把 lossy 乱码交给编辑器（保存回去就毁了原文件）
+    #[test]
+    fn read_source_returns_content_and_rejects_non_utf8() {
+        let d = std::env::temp_dir().join(format!("md2x-src-r-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+
+        let f = d.join("ok.md");
+        std::fs::write(&f, "# 你好\n\nbody").unwrap();
+        let src = read_source_impl(&f).unwrap();
+        assert_eq!(src.content, "# 你好\n\nbody");
+        assert!(src.mtime_ms.is_some(), "正常文件应带回 mtime");
+
+        let gbk = d.join("gbk.md");
+        //「测试」两字的 GBK 编码，不是合法 UTF-8
+        std::fs::write(&gbk, b"\xb2\xe2\xca\xd4").unwrap();
+        let err = read_source_impl(&gbk).unwrap_err();
+        assert!(err.contains("UTF-8"), "应明确提示编码问题: {err}");
+
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 正常保存：内容落盘、返回新 mtime、临时文件不残留
+    #[test]
+    fn write_source_saves_content_and_cleans_tmp() {
+        let d = std::env::temp_dir().join(format!("md2x-src-w-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("a.md");
+        std::fs::write(&f, "old").unwrap();
+
+        let base = mtime_ms_of(&f);
+        let out = write_source_impl(&f, "new content", base, false).unwrap();
+        let WriteOutcome::Saved { mtime_ms } = out else {
+            panic!("mtime 一致时应直接保存，实际: {out:?}");
+        };
+        assert!(mtime_ms > 0);
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "new content");
+        assert!(
+            !d.join(".a.md.md2x-tmp").exists(),
+            "临时文件必须被 rename 走"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 冲突检测：磁盘 mtime 与 base 不符时返回 Conflict 且不落盘；
+    /// force = true 时覆盖写入；文件被外部删除（mtime None）同样算冲突
+    #[test]
+    fn write_source_detects_external_modification() {
+        let d = std::env::temp_dir().join(format!("md2x-src-c-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("a.md");
+        std::fs::write(&f, "v1").unwrap();
+        let stale_base = Some(1_000_u64); // 远早于真实 mtime 的基准
+
+        let out = write_source_impl(&f, "v2", stale_base, false).unwrap();
+        let WriteOutcome::Conflict { current_mtime_ms } = out else {
+            panic!("mtime 不符应返回 Conflict，实际: {out:?}");
+        };
+        assert!(current_mtime_ms.is_some());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v1", "冲突时不得落盘");
+
+        let out = write_source_impl(&f, "v2", stale_base, true).unwrap();
+        assert!(matches!(out, WriteOutcome::Saved { .. }));
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v2");
+
+        // 文件被删：mtime 变 None，与 base 不符 → 冲突；force 可重建
+        std::fs::remove_file(&f).unwrap();
+        let out = write_source_impl(&f, "v3", stale_base, false).unwrap();
+        assert!(matches!(out, WriteOutcome::Conflict { current_mtime_ms: None }));
+        let out = write_source_impl(&f, "v3", stale_base, true).unwrap();
+        assert!(matches!(out, WriteOutcome::Saved { .. }));
+
         let _ = std::fs::remove_dir_all(&d);
     }
 }
