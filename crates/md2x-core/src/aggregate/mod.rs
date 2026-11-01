@@ -52,13 +52,23 @@ pub fn concat_docs_with_config(
     let collected = collector::collect_with_config(root, order, exclude);
     let mut parts: Vec<String> = Vec::new();
     for doc in &collected.docs {
-        let md = std::fs::read_to_string(&doc.path)?;
-        let (_fm, body) = converter::parse_front_matter(&md);
+        let src = std::fs::read_to_string(&doc.path)?;
+        // DBML：先短路转成数据字典式 Markdown 再拼接（与单文件 DOCX 链路同一实现，
+        // 产出不会漂移）；Markdown：原样参与拼接
+        if collector::is_dbml(&doc.path) {
+            parts.push(
+                crate::docsource::to_markdown(crate::docsource::Renderer::Dbml, &src, &doc.title)
+                    .trim()
+                    .to_string(),
+            );
+            continue;
+        }
+        let (_fm, body) = converter::parse_front_matter(&src);
         parts.push(body.trim().to_string());
     }
     if parts.is_empty() {
         return Err(MpeError::FileNotFound(format!(
-            "{} 内没有 Markdown 文件",
+            "{} 内没有可导出的文档",
             root.display()
         )));
     }
@@ -128,7 +138,7 @@ pub fn aggregate_folder_to_html_with_config(
     let collected = collector::collect_with_config(root, order, exclude);
     if collected.docs.is_empty() {
         return Err(MpeError::FileNotFound(format!(
-            "{} 内没有 Markdown 文件",
+            "{} 内没有可导出的文档",
             root.display()
         )));
     }
@@ -175,12 +185,19 @@ pub fn aggregate_folder_to_html_with_config(
     })
 }
 
-/// 渲染单篇文档：读取 → 转 HTML → mermaid 烘焙 → 图片内联 → 注入带前缀的锚点
+/// 渲染单篇文档：读取 → 按源类型转 HTML → mermaid 烘焙 → 图片内联 → 注入带前缀的锚点
+///
+/// Markdown 走既有链路；DBML 与单文件预览共用 `render_body_by_renderer` 的同一
+/// 渲染入口，产出同形态的 body 片段，保证「单文件预览看到的和聚合导出的一致」。
 fn render_doc(doc: &DocEntry) -> Result<RenderedDoc, MpeError> {
-    let md = std::fs::read_to_string(&doc.path)?;
-    let (_, body_md) = converter::parse_front_matter(&md);
-    let html = converter::convert_markdown_to_html_with_mermaid(body_md)?;
-    let html = converter::resolve_image_srcs(&html, &doc.path);
+    let src = std::fs::read_to_string(&doc.path)?;
+    let html = if collector::is_dbml(&doc.path) {
+        converter::render_body_by_renderer(crate::docsource::Renderer::Dbml, &src, None)?
+    } else {
+        let (_, body_md) = converter::parse_front_matter(&src);
+        let h = converter::convert_markdown_to_html_with_mermaid(body_md)?;
+        converter::resolve_image_srcs(&h, &doc.path)
+    };
     let (headings, html) = template::inject_heading_ids(&html, &doc.anchor_prefix);
     Ok(RenderedDoc { html, headings })
 }
@@ -338,6 +355,47 @@ mod tests {
         assert!(r.html.contains("id=\"doc-0\""));
         assert!(r.html.contains("id=\"doc-1\""));
         assert!(r.html.contains("id=\"doc-2\""));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn 聚合包含dbml文档() {
+        // DBML 是文件树的一等公民，聚合导出必须同样收录并按 DBML 渲染
+        let d = tmpdir("dbmlagg");
+        write(d.as_path(), "README.md", "# 索引\n\n见 [schema](schema.dbml)");
+        write(
+            d.as_path(),
+            "schema.dbml",
+            "Project demo {\n  database_type: 'mysql'\n}\nTable users {\n  id int [pk]\n  name varchar\n}",
+        );
+
+        let r = aggregate_folder_to_html(d.as_path(), false, crate::template::Theme::Auto, None)
+            .unwrap();
+        assert_eq!(r.doc_count, 2, "dbml 文档应计入聚合数");
+        assert!(
+            r.html.contains("数据字典") || r.html.contains("users"),
+            "DBML 应被渲染为数据字典内容"
+        );
+        // 指向 dbml 的链接应被改写为页内锚点，而不是当成带不走的文件
+        assert!(
+            !r.html.contains("href=\"schema.dbml\""),
+            "dbml 链接不应保留原样: {}",
+            &r.html[r.html.len() - 800..]
+        );
+        assert!(r.html.contains("href=\"#doc-1\""));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn docx拼接把dbml转为markdown() {
+        let d = tmpdir("dbmlmd");
+        write(d.as_path(), "a.md", "# A");
+        write(d.as_path(), "s.dbml", "Table users { id int [pk] }");
+
+        let md = concat_docs(d.as_path()).unwrap();
+        assert!(md.contains("# A"), "md 文档原样保留");
+        assert!(md.contains("users"), "dbml 应转成含表名的 markdown");
+        assert!(md.contains("**表** 1"), "dbml 摘要应含统计元数据");
         let _ = std::fs::remove_dir_all(&d);
     }
 

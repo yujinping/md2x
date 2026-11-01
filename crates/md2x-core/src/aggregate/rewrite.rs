@@ -110,8 +110,8 @@ fn missing_file_target(tag: &str, ctx: &RewriteCtx) -> Option<String> {
         return None;
     }
     let rel = super::collector::normalize_rel(ctx.self_dir, path_part);
-    // md 链接：只有目标被排除时才算缺失；正常收集到的交给 map_href
-    if is_markdown_path(path_part) {
+    // 文档链接（md/dbml）：只有目标被排除时才算缺失；正常收集到的交给 map_href
+    if is_local_doc_path(path_part) {
         return if ctx.is_excluded(&rel) { Some(rel) } else { None };
     }
     Some(rel)
@@ -279,12 +279,12 @@ fn map_href(href: &str, ctx: &RewriteCtx) -> Option<String> {
     }
 
     // 本地文档链接
-    if !is_markdown_path(path_part) {
+    if !is_local_doc_path(path_part) {
         return None;
     }
     let rel = super::collector::normalize_rel(ctx.self_dir, path_part);
     let Some(section_id) = ctx.by_rel.get(&rel) else {
-        // 未被聚合的文档（不存在 / 非 md）保留原样，避免死链
+        // 未被聚合的文档（不存在 / 未收录）保留原样，避免死链
         return None;
     };
 
@@ -306,9 +306,13 @@ fn own_section_id(ctx: &RewriteCtx) -> String {
     ctx.self_prefix.trim_end_matches('-').to_string()
 }
 
-fn is_markdown_path(p: &str) -> bool {
+/// 本地文档链接判定：指向会被聚合进产物的文档类型。
+///
+/// `.md` / `.markdown` / `.dbml`：这三类会被收集器收进聚合产物，
+/// 链接可以改写为页内锚点；其余后缀（pdf/xlsx/zip…）带不走，按「未打包」提示处理。
+fn is_local_doc_path(p: &str) -> bool {
     let lower = p.to_ascii_lowercase();
-    lower.ends_with(".md") || lower.ends_with(".markdown")
+    lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".dbml")
 }
 
 /// percent-decode：把 `%E4%B8%AD` 还原为 UTF-8 字节再转字符串。

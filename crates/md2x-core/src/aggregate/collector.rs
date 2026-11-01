@@ -180,7 +180,7 @@ fn walk_depth_first(
                 continue;
             }
             entries.push((rel, path, true));
-        } else if ft.is_file() && is_markdown(&path) {
+        } else if ft.is_file() && (is_markdown(&path) || is_dbml(&path)) {
             entries.push((rel, path, false));
         }
     }
@@ -259,6 +259,19 @@ pub fn is_markdown(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("md"))
+        .unwrap_or(false)
+}
+
+/// 是否为 DBML 源文件（`.dbml`，不区分大小写）。
+///
+/// 文件树按用户渲染类型配置收录 `.dbml`（默认启用），导出收集必须与之一致，
+/// 否则会出现「树里能看到、聚合产物里却没有」的不对称——这正是本函数
+/// 存在的原因：早期版本只收 `.md`，DBML 在树里可见却永远导不出来。
+/// 聚合导出时 DBML 会被转成数据字典式内容（见 `aggregate::render_doc`）。
+pub fn is_dbml(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("dbml"))
         .unwrap_or(false)
 }
 
@@ -381,6 +394,24 @@ mod tests {
         let mut got = names(&c);
         got.sort();
         assert_eq!(got, vec!["a.md", "c.MD"], ".markdown 不应被收集");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn 收集dbml文件与md一致() {
+        // 文件树里 .dbml 是一等公民（渲染类型默认收录），聚合必须同样收录，
+        // 否则「树里能看到、聚合产物里却没有」——早期版本就栽在这
+        let d = tmpdir("dbml");
+        write(d.as_path(), "a.md", "# A");
+        write(d.as_path(), "schema.dbml", "Table users { id int }");
+        write(d.as_path(), "sub/SYSTEM.DBML", "Table t { x varchar }");
+
+        let c = collect(d.as_path());
+        assert_eq!(c.docs.len(), 3, ".dbml 应与 .md 一样被收集: {:?}", names(&c));
+        assert!(is_dbml(Path::new("x.dbml")));
+        assert!(is_dbml(Path::new("x.DBML")));
+        assert!(!is_dbml(Path::new("x.md")));
+        assert!(!is_dbml(Path::new("x.txt")));
         let _ = std::fs::remove_dir_all(&d);
     }
 
