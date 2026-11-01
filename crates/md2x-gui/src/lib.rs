@@ -3190,7 +3190,7 @@ fn platform_register_default() -> Result<bool, String> {
     // 兼容 .md / .markdown 两种常见 UTI 声明
     for uti in ["net.daringfireball.markdown", "public.markdown-file"] {
         let entry =
-            format!("{{LSHandlerContentType = \"{uti}\"; LSHandlerRoleAll = \"com.mpe.md2x\";}}");
+            format!("{{LSHandlerContentType = \"{uti}\"; LSHandlerRoleAll = \"top.yujinping.md2x\";}}");
         let out = Command::new("/usr/bin/defaults")
             .args(["write", domain, "LSHandlers", "-array-add", &entry])
             .output()
