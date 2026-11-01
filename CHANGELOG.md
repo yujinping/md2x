@@ -1,4 +1,4 @@
-## [unreleased]
+## [1.5.0] - 2026-11-01
 
 ### 🚀 Features
 
@@ -9,6 +9,10 @@
 ### 🐛 Bug Fixes
 
 - *(aggregate)* 文件夹聚合导出收录 DBML
+
+### ⚙️ Miscellaneous Tasks
+
+- Release v1.5.0
 ## [1.4.2] - 2026-10-31
 
 ### 🚀 Features
